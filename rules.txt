@@ -1,0 +1,205 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =================================================================================
+    // 🛡️ SECURITY KERNEL (FUNÇÕES AUXILIARES)
+    // =================================================================================
+
+    // --- Autenticação & Identidade ---
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // --- Role-Based Access Control (RBAC) ---
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isTeacher() {
+      return isAuthenticated() && getUserRole() == 'professor';
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'admin';
+    }
+
+    // --- Validação de Dados (Schema Validation) ---
+    function isValidString(text, min, max) {
+      return text is string && text.size() >= min && text.size() <= max;
+    }
+
+    function isNumber(val) {
+      return val is int || val is float;
+    }
+    
+    function isValidPercentage(val) {
+      return isNumber(val) && val >= 0 && val <= 100;
+    }
+
+    function notUpdating(field) {
+      return !(field in request.resource.data) || resource.data[field] == request.resource.data[field];
+    }
+
+    // =================================================================================
+    // 👤 USUÁRIOS & PERFIS
+    // =================================================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      
+      allow create: if isUser(userId)
+        && isValidString(request.resource.data.name, 1, 100)
+        && request.resource.data.role in ['aluno', 'professor', 'admin'];
+
+      allow update: if isUser(userId) 
+        && notUpdating('role'); 
+
+      match /quiz_results/{quizId} { allow read, write: if isUser(userId); }
+      match /modulesProgress/{moduleId} { 
+        allow read: if isUser(userId);
+        allow write: if isUser(userId) && isValidPercentage(request.resource.data.progress);
+      }
+      match /read_notifications/{notifId} { allow read, write: if isUser(userId); }
+    }
+
+    // =================================================================================
+    // 🏫 TURMAS (CLASSES)
+    // =================================================================================
+
+    match /classes/{classId} {
+      allow read: if isAuthenticated();
+
+      allow create: if (isTeacher() || isAdmin())
+        && request.resource.data.teacherId == request.auth.uid
+        && isValidString(request.resource.data.name, 3, 100);
+
+      allow update: if (isTeacher() && resource.data.teacherId == request.auth.uid) ||
+                    (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['students', 'studentIds', 'studentCount', 'inactiveTeachers']));
+      
+      allow delete: if (isTeacher() && resource.data.teacherId == request.auth.uid) || isAdmin();
+    }
+
+    // =================================================================================
+    // 📚 CONTEÚDO (MÓDULOS & QUIZZES)
+    // =================================================================================
+
+    match /modules/{moduleId} {
+      allow read: if isAuthenticated();
+      allow create: if isTeacher() || isAdmin();
+      allow update: if (isTeacher() && resource.data.creatorId == request.auth.uid) || isAdmin();
+      allow delete: if (isTeacher() && resource.data.creatorId == request.auth.uid) || isAdmin();
+    }
+
+    match /module_contents/{moduleId} {
+      allow read: if isAuthenticated();
+      allow write: if isTeacher() || isAdmin();
+    }
+
+    match /quizzes/{quizId} {
+      allow read: if isAuthenticated();
+      allow write: if isTeacher() || isAdmin();
+    }
+
+    // =================================================================================
+    // 📝 ATIVIDADES & SUBMISSÕES
+    // =================================================================================
+
+    match /activities/{activityId} {
+      allow read: if isAuthenticated();
+      
+      allow create: if isTeacher() 
+        && request.resource.data.creatorId == request.auth.uid
+        && isValidString(request.resource.data.title, 1, 200);
+
+      // Update: Professor dono OU contador de submissões (incrementado por alunos)
+      // Nota: 'submissions' está aqui para compatibilidade legada, mas o ideal é usar subcoleção
+      allow update: if (isTeacher() && resource.data.creatorId == request.auth.uid) ||
+                    (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['submissionCount', 'pendingSubmissionCount', 'submissions']));
+      
+      allow delete: if (isTeacher() && resource.data.creatorId == request.auth.uid) || isAdmin();
+
+      // --- SUBMISSÕES (SUBCOLEÇÃO) ---
+      match /submissions/{submissionId} {
+        // LEITURA OTIMIZADA:
+        // 1. Aluno: Verifica DIRETAMENTE o campo studentId. Essencial para collectionGroup queries.
+        // 2. Professor: Verifica o dono da atividade pai.
+        allow read: if resource.data.studentId == request.auth.uid ||
+                    (isAuthenticated() && get(/databases/$(database)/documents/activities/$(activityId)).data.creatorId == request.auth.uid);
+
+        // CRIAR: Aluno cria apenas para si mesmo
+        allow create: if isUser(request.resource.data.studentId);
+
+        // ATUALIZAR:
+        // 1. Aluno: Pode atualizar conteúdo, mas NÃO pode mudar nota ou feedback.
+        // 2. Professor: Pode atualizar tudo (dar nota).
+        allow update: if (isUser(resource.data.studentId) && notUpdating('grade') && notUpdating('feedback')) ||
+                      (isAuthenticated() && get(/databases/$(database)/documents/activities/$(activityId)).data.creatorId == request.auth.uid);
+      }
+    }
+
+    // =================================================================================
+    // 🏆 GAMIFICATION & ESTATÍSTICAS
+    // =================================================================================
+
+    match /achievements/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /userAchievements/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isUser(userId); 
+    }
+
+    match /student_grades/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isTeacher();
+    }
+
+    // =================================================================================
+    // 🔔 COMUNICAÇÃO & SISTEMA
+    // =================================================================================
+
+    match /notifications/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isUser(resource.data.userId);
+    }
+
+    match /broadcasts/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isTeacher() || isAdmin();
+      allow delete: if isTeacher() || isAdmin();
+    }
+
+    match /invitations/{id} {
+      allow read: if isUser(resource.data.inviterId) || isUser(resource.data.inviteeId);
+      allow create: if isTeacher();
+      allow update, delete: if isUser(resource.data.inviterId) || isUser(resource.data.inviteeId);
+    }
+
+    match /teacher_history/{userId} {
+      allow read, write: if isUser(userId);
+    }
+
+    match /attendance_sessions/{sessionId} {
+      allow read: if isAuthenticated();
+      allow write: if isTeacher();
+      
+      match /records/{recordId} {
+        allow read: if isAuthenticated();
+        allow write: if isTeacher();
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

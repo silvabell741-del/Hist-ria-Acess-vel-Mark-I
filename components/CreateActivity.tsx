@@ -7,22 +7,11 @@ import { useTeacherAcademicContext } from '../contexts/TeacherAcademicContext';
 import { useTeacherClassContext } from '../contexts/TeacherClassContext';
 import { useNavigation } from '../contexts/NavigationContext';
 import { useToast } from '../contexts/ToastContext';
-// Importação atualizada para Code Splitting e Compressão:
 import { storage } from './firebaseStorage';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useAuth } from '../contexts/AuthContext';
 import { compressImage } from '../utils/imageCompression';
-
-// --- Local Components Defined Outside ---
-const InputField: React.FC<{ label: string, required?: boolean, children?: React.ReactNode, helperText?: string }> = ({ label, required, children, helperText }) => (
-    <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1 hc-text-secondary">
-            {label} {required && <span className="text-red-500">*</span>}
-        </label>
-        {children}
-        {helperText && <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{helperText}</p>}
-    </div>
-);
+import { InputField } from './common/FormHelpers';
 
 const CreateActivity: React.FC = () => {
     // Hooks
@@ -152,7 +141,6 @@ const CreateActivity: React.FC = () => {
             if (attachments.length > 0) {
                 addToast('Processando anexos (Compressão ativada)...', 'info');
                 for (const file of attachments) {
-                    // COMPRESSÃO DE IMAGEM CLIENT-SIDE
                     const processedFile = await compressImage(file);
                     
                     const filePath = `activity_attachments/${folderId}/${user.id}/${Date.now()}-${processedFile.name}`;
@@ -209,7 +197,6 @@ const CreateActivity: React.FC = () => {
         else setCurrentPage('teacher_dashboard');
     };
 
-    // Render
     return (
         <div className="space-y-6">
             <div className="flex justify-end items-center -mb-2">

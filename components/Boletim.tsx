@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { useStudentAcademic } from '../contexts/StudentAcademicContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -71,10 +70,9 @@ const ClassReportCard: React.FC<{ classId: string; classReport: ClassGradeReport
 
                     return (
                         <div key={unidadeName}>
-                            <div 
-                                className="flex justify-between items-center p-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" 
+                            <button 
+                                className="w-full flex justify-between items-center p-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500" 
                                 onClick={() => toggleUnidade(unidadeName)} 
-                                role="button" 
                                 aria-expanded={isExpanded}
                             >
                                 <div>
@@ -85,7 +83,7 @@ const ClassReportCard: React.FC<{ classId: string; classReport: ClassGradeReport
                                     <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Ver Detalhes</span>
                                     <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 text-slate-500 transform transition-transform ${isExpanded ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                                 </div>
-                            </div>
+                            </button>
                             
                             {isExpanded && (
                                 <div className="bg-slate-50/50 dark:bg-slate-900/20 border-t dark:border-slate-700">

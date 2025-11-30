@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import type { ModulePage } from '../types';
 import { Card } from './common/Card';
 import { useNavigation } from '../contexts/NavigationContext';
@@ -12,7 +12,9 @@ import { db } from './firebaseClient';
 import { getSessionCache, setSessionCache } from '../utils/cacheUtils';
 import { getOfflineModule } from '../utils/offlineManager';
 import { useToast } from '../contexts/ToastContext';
-import { BlockRenderer } from './modules/BlockRenderer';
+
+// Lazy Load BlockRenderer for better initial bundle size
+const BlockRenderer = lazy(() => import('./modules/BlockRenderer').then(module => ({ default: module.BlockRenderer })));
 
 const ModuleViewPage: React.FC = () => {
     const { activeModule: module, exitModule: onExit } = useNavigation();
@@ -190,6 +192,7 @@ const ModuleViewPage: React.FC = () => {
     const handleNext = async () => {
         if (isLastPage) {
             if (userRole === 'aluno') {
+                // If offline, user can't "officially" complete to get points/sync
                 if (!navigator.onLine) {
                     alert("Conecte-se à internet para concluir o módulo e salvar seu progresso.");
                     onExit();
@@ -259,8 +262,13 @@ const ModuleViewPage: React.FC = () => {
                 {currentPage ? (
                     <>
                         <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-4 hc-text-primary">{currentPage.title}</h2>
-                        {/* Use the new BlockRenderer */}
-                        <BlockRenderer content={currentPage.content} />
+                        <Suspense fallback={
+                            <div className="flex justify-center p-8">
+                                <SpinnerIcon className="h-8 w-8 text-indigo-500" />
+                            </div>
+                        }>
+                            <BlockRenderer content={currentPage.content} />
+                        </Suspense>
                     </>
                 ) : (
                     <div className="text-center py-10">

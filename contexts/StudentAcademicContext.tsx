@@ -1,6 +1,6 @@
 
-import React, { createContext, useContext, useMemo } from 'react';
-import type { Module, Quiz, Activity, TeacherClass, GradeReport, ClassGradeReport, Unidade, ActivitySubmission } from '../types';
+import React, { createContext, useContext } from 'react';
+import type { Module, Quiz, Activity, TeacherClass, GradeReport, ActivitySubmission } from '../types';
 import { useAuth } from './AuthContext';
 import { useStudentContent } from '../hooks/useStudentContent';
 import { useStudentReport } from '../hooks/useStudentReport';
@@ -15,44 +15,27 @@ interface ModuleFilters {
 }
 
 interface StudentAcademicContextType {
-    // Dados Principais
     inProgressModules: Module[];
     searchedModules: Module[];
     searchedQuizzes: Quiz[];
     studentClasses: TeacherClass[];
     gradeReport: GradeReport;
-    userSubmissions: Record<string, ActivitySubmission>; // Mapa ActivityID -> Submission
-    
-    // Filtros Persistidos
+    userSubmissions: Record<string, ActivitySubmission>;
     moduleFilters: ModuleFilters;
-    
-    // Flags
     isLoading: boolean;
     isSearchingModules: boolean;
     isSearchingQuizzes: boolean;
-
-    // Actions
     refreshContent: (forceRefresh?: boolean) => Promise<void>;
-    searchModules: (filters: { 
-        queryText?: string; 
-        serie?: string; 
-        materia?: string; 
-        status?: 'Não iniciado' | 'Concluído' | 'Em andamento' | 'all';
-        scope: 'my_modules' | 'public';
-    }) => Promise<void>;
-    searchQuizzes: (filters: { serie?: string; materia?: string; status?: 'feito' | 'nao_iniciado' | 'all' }) => Promise<void>;
-    
-    // Activities (Legacy/Paginated)
-    searchActivities: (
-        filters: { classId: string; materia: string; unidade: string }, 
-        lastDoc?: QueryDocumentSnapshot | null
-    ) => Promise<{ activities: Activity[], lastDoc: QueryDocumentSnapshot | null }>;
-    
+    searchModules: (filters: any) => Promise<void>;
+    searchQuizzes: (filters: any) => Promise<void>;
+    searchActivities: (filters: any, lastDoc?: QueryDocumentSnapshot | null) => Promise<{ activities: Activity[], lastDoc: QueryDocumentSnapshot | null }>;
     handleActivitySubmit: (activityId: string, content: string) => Promise<void>;
     handleJoinClass: (code: string) => Promise<boolean>;
     handleLeaveClass: (classId: string) => void;
     handleModuleProgressUpdate: (moduleId: string, progress: number) => Promise<void>;
     handleModuleComplete: (moduleId: string) => Promise<void>;
+    setSearchedQuizzes: React.Dispatch<React.SetStateAction<Quiz[]>>;
+    setSearchedModules: React.Dispatch<React.SetStateAction<Module[]>>;
 }
 
 export const StudentAcademicContext = createContext<StudentAcademicContextType | undefined>(undefined);
@@ -60,17 +43,15 @@ export const StudentAcademicContext = createContext<StudentAcademicContextType |
 export function StudentAcademicProvider({ children }: { children?: React.ReactNode }) {
     const { user } = useAuth();
     
-    // Hook principal de conteúdo (Módulos, Quizzes, Atividades Paginadas)
+    // React Query Powered Hook
     const content = useStudentContent(user);
     
-    // Novo Hook dedicado ao Boletim (Calcula todas as notas das turmas)
+    // Reporting Hook (Independent)
     const { gradeReport, isLoadingReport } = useStudentReport(user, content.studentClasses);
 
     const value = {
         ...content,
         gradeReport,
-        // Combina o loading geral com o loading do relatório para evitar que a UI renderize 
-        // o componente de Boletim vazio antes das notas serem processadas.
         isLoading: content.isLoading || isLoadingReport
     };
 

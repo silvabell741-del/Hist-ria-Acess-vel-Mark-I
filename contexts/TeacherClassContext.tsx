@@ -1,5 +1,4 @@
 
-
 import React, { createContext, useContext } from 'react';
 import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
@@ -8,14 +7,14 @@ import type { TeacherClass, AttendanceSession, Turno, AttendanceStatus } from '.
 
 export interface TeacherClassContextType {
     teacherClasses: TeacherClass[];
-    archivedClasses: TeacherClass[]; // Nova lista
+    archivedClasses: TeacherClass[];
     attendanceSessionsByClass: Record<string, AttendanceSession[]>;
     isLoadingClasses: boolean;
     isSubmittingClass: boolean;
     fetchTeacherClasses: (forceRefresh?: boolean) => Promise<void>;
     fetchClassDetails: (classId: string) => Promise<void>;
     handleCreateClass: (name: string) => Promise<void>;
-    handleArchiveClass: (classId: string) => Promise<void>; // Nova função
+    handleArchiveClass: (classId: string) => Promise<void>;
     handleCreateAttendanceSession: (classId: string, date: string, turno: Turno, horario: number) => Promise<void>;
     handleUpdateAttendanceStatus: (sessionId: string, recordId: string, status: AttendanceStatus) => Promise<void>;
     handleLeaveClass: (classId: string) => Promise<void>;
@@ -29,6 +28,7 @@ export function TeacherClassProvider({ children }: { children?: React.ReactNode 
     const { user } = useAuth();
     const { addToast } = useToast();
 
+    // Hook now uses React Query internally
     const classData = useTeacherClasses(user, addToast);
 
     return (

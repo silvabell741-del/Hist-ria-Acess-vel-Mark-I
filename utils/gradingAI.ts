@@ -1,5 +1,6 @@
 
 // FILE: utils/gradingAI.ts
+import { auth } from '../components/firebaseClient';
 
 export interface GradingResult {
   grade: number;
@@ -19,6 +20,13 @@ export async function generateFeedbackAndGrade(
   if (!studentAnswer || studentAnswer.trim() === "") {
       return { grade: 0, feedback: "Não houve resposta para esta questão." };
   }
+
+  const user = auth.currentUser;
+  if (!user) {
+      throw new Error("Usuário não autenticado.");
+  }
+
+  const token = await user.getIdToken();
 
   const prompt = `
     Atue como um professor de História experiente. Avalie a resposta do aluno para a questão abaixo.
@@ -42,7 +50,8 @@ export async function generateFeedbackAndGrade(
     const response = await fetch('/api/ai', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
             model: "gemini-2.5-flash",
@@ -62,6 +71,9 @@ export async function generateFeedbackAndGrade(
     });
 
     if (!response.ok) {
+        if (response.status === 401) {
+            throw new Error("Sessão expirada ou não autorizada. Faça login novamente.");
+        }
         throw new Error(`Erro na API: ${response.statusText}`);
     }
 
@@ -85,6 +97,6 @@ export async function generateFeedbackAndGrade(
 
   } catch (error) {
     console.error("Erro na correção com IA (Proxy):", error);
-    throw new Error("Falha ao conectar com o serviço de Inteligência Artificial.");
+    throw error;
   }
 }

@@ -145,74 +145,93 @@ export function useTeacherContent(
         }
     }, [modulesLibraryLoaded, user]);
 
-    const recalculateStudentGradeSummary = useCallback(async (classId: string, studentId: string, updatedActivityInfo?: { activityId: string, grade: number }) => {
+    /**
+     * Atualiza o documento consolidado de notas (Boletim) do aluno.
+     * Refatorado para garantir atualização cirúrgica e robustez.
+     */
+    const recalculateStudentGradeSummary = useCallback(async (
+        classId: string, 
+        studentId: string, 
+        updatedActivityInfo: { activityId: string, title: string, grade: number, maxPoints: number, unidade: Unidade, materia: string },
+        fallbackClassName?: string
+    ) => {
         try {
-            const currentClasses = teacherClassesRef.current;
-            const cls = currentClasses.find(c => c.id === classId);
-            
-            if (!cls) return;
-
-            // This relies on loaded activities in context. For stricter accuracy, we might need to fetch all class activities if lazy loaded.
-            // But usually teacher has loaded class details when grading.
-            const activities = cls.activities || [];
             const summaryId = `${classId}_${studentId}`;
+            const summaryRef = doc(db, "student_grades", summaryId);
+            const summarySnap = await getDoc(summaryRef);
             
-            const reportUnidades: { [key in Unidade]?: GradeReportUnidade } = {};
+            let summaryData: StudentGradeSummaryDoc;
+            let className = fallbackClassName || 'Turma';
 
-            // IMPORTANT: Here we iterate in-memory submissions. 
-            // Since we are moving away from parent array, we need to ensure 'activities' in context 
-            // have the latest submission status.
-            // Currently, `handleGradeActivity` updates the local state `activities`.
-            // So this logic holds IF we update local state correctly.
-
-            for (const activity of activities) {
-                // Find submission in memory
-                let submission = activity.submissions?.find(s => s.studentId === studentId);
-                
-                if (updatedActivityInfo && activity.id === updatedActivityInfo.activityId) {
-                    submission = { 
-                        ...submission, 
-                        studentId, 
-                        studentName: '',
-                        submissionDate: '',
-                        content: '',
-                        status: 'Corrigido',
-                        grade: updatedActivityInfo.grade 
-                    } as any;
-                }
-
-                if (submission && submission.status === 'Corrigido' && typeof submission.grade === 'number') {
-                    const unidade = (activity.unidade as Unidade) || '1ª Unidade';
-                    const materia = activity.materia || 'Geral';
-
-                    if (!reportUnidades[unidade]) {
-                        reportUnidades[unidade] = { subjects: {} };
-                    }
-                    if (!reportUnidades[unidade]!.subjects[materia]) {
-                        reportUnidades[unidade]!.subjects[materia] = { activities: [], totalPoints: 0 };
-                    }
-
-                    const subjEntry = reportUnidades[unidade]!.subjects[materia];
-                    subjEntry.activities.push({
-                        id: activity.id,
-                        title: activity.title,
-                        grade: submission.grade,
-                        maxPoints: activity.points,
-                        materia: materia
-                    });
-                    subjEntry.totalPoints += submission.grade;
-                }
+            // Tenta resolver o nome da turma da memória se não fornecido
+            if (className === 'Turma') {
+                 const cls = teacherClassesRef.current.find(c => c.id === classId);
+                 if (cls) className = cls.name;
             }
 
-            const summaryDoc: StudentGradeSummaryDoc = {
-                classId,
-                studentId,
-                className: cls.name,
-                unidades: reportUnidades,
-                updatedAt: serverTimestamp()
-            };
+            if (summarySnap.exists()) {
+                summaryData = summarySnap.data() as StudentGradeSummaryDoc;
+                // Atualiza o nome da turma se estiver genérico ou faltando
+                if (className !== 'Turma' && (!summaryData.className || summaryData.className === 'Turma')) {
+                    summaryData.className = className;
+                }
+            } else {
+                // Se ainda não temos nome e o doc não existe, tenta buscar o documento da turma
+                if (className === 'Turma') {
+                    try {
+                        const classSnap = await getDoc(doc(db, "classes", classId));
+                        if (classSnap.exists()) className = classSnap.data().name;
+                    } catch (e) { console.warn("Could not fetch class name for summary creation"); }
+                }
 
-            await setDoc(doc(db, "student_grades", summaryId), summaryDoc, { merge: true });
+                summaryData = {
+                    classId,
+                    studentId,
+                    className,
+                    unidades: {},
+                    updatedAt: serverTimestamp()
+                };
+            }
+
+            // 2. Localizar e atualizar a atividade específica na estrutura
+            const { unidade, materia, activityId, title, grade, maxPoints } = updatedActivityInfo;
+            const unidadeKey = unidade || '1ª Unidade';
+            const materiaKey = materia || 'Geral';
+
+            if (!summaryData.unidades[unidadeKey]) {
+                summaryData.unidades[unidadeKey] = { subjects: {} };
+            }
+            if (!summaryData.unidades[unidadeKey]!.subjects[materiaKey]) {
+                summaryData.unidades[unidadeKey]!.subjects[materiaKey] = { activities: [], totalPoints: 0 };
+            }
+
+            const subjectEntry = summaryData.unidades[unidadeKey]!.subjects[materiaKey];
+            
+            // Verifica se a atividade já existe no relatório
+            const existingActivityIndex = subjectEntry.activities.findIndex(a => a.id === activityId);
+
+            if (existingActivityIndex > -1) {
+                // Atualizar atividade existente
+                const oldGrade = subjectEntry.activities[existingActivityIndex].grade;
+                subjectEntry.activities[existingActivityIndex].grade = grade;
+                // Atualizar total de pontos (subtrair antigo, somar novo)
+                subjectEntry.totalPoints = (subjectEntry.totalPoints - oldGrade) + grade;
+            } else {
+                // Adicionar nova atividade
+                subjectEntry.activities.push({
+                    id: activityId,
+                    title: title,
+                    grade: grade,
+                    maxPoints: maxPoints,
+                    materia: materiaKey
+                });
+                subjectEntry.totalPoints += grade;
+            }
+
+            summaryData.updatedAt = serverTimestamp();
+
+            // 3. Salvar de volta no Firestore com merge
+            await setDoc(summaryRef, summaryData, { merge: true });
 
         } catch (error) {
             console.error("Failed to update student grade summary:", error);
@@ -356,27 +375,32 @@ export function useTeacherContent(
                  // PHASE 3 SCALABILITY: Write to Subcollection
                  await setDoc(doc(collection(activityRef, "submissions"), studentId), submissionPayload, { merge: true });
                  
-                 // PHASE 3 SCALABILITY: Update Counters only, DO NOT update array
+                 // PHASE 3 SCALABILITY: Update Counters only
                  // Decrement pending count if it was pending
                  await updateDoc(activityRef, { pendingSubmissionCount: increment(-1) });
 
-                 if (user) {
-                    await createNotification({
-                        userId: studentId, actorId: user.id, actorName: user.name, type: 'activity_correction',
-                        title: 'Atividade Corrigida', text: `Sua atividade "${activityData.title}" foi corrigida. Nota: ${grade}`,
-                        classId: activityData.classId!, activityId: activityId
-                    });
+                 // ROBUST NOTIFICATION: Wrap in try/catch to not block success if notification service fails
+                 try {
+                     if (user) {
+                        await createNotification({
+                            userId: studentId, actorId: user.id, actorName: user.name, type: 'activity_correction',
+                            title: 'Atividade Corrigida', text: `Sua atividade "${activityData.title}" foi corrigida. Nota: ${grade}`,
+                            classId: activityData.classId!, activityId: activityId
+                        });
+                     }
+                 } catch (notifError) {
+                     console.error("Failed to send notification:", notifError);
+                     // Non-blocking error
                  }
 
                  // Update Local State (Optimistic UI)
-                 // We still need to maintain 'submissions' in local state for the UI to reflect changes immediately
                  setTeacherClasses(prevClasses => prevClasses.map(cls => {
                      if (cls.id !== classId) return cls;
                      return {
                          ...cls,
                          activities: cls.activities.map(act => {
                              if (act.id !== activityId) return act;
-                             // We update the local array even if DB array is gone
+                             // Atualizamos o array local para refletir na UI, embora o DB não use mais array
                              const updatedSubmissions = (act.submissions || []).map(sub => {
                                  if (sub.studentId !== studentId) return sub;
                                  const updatedSub = { ...sub, status: 'Corrigido', grade, feedback, gradedAt: new Date().toISOString() } as any;
@@ -396,14 +420,26 @@ export function useTeacherContent(
                      return item;
                  }).filter(item => item.pendingCount > 0));
 
+                 // RECALCULAR BOLETIM / HISTÓRICO
                  if (classId) {
-                     recalculateStudentGradeSummary(classId, studentId, { activityId, grade });
+                     await recalculateStudentGradeSummary(classId, studentId, { 
+                         activityId, 
+                         title: activityData.title,
+                         grade,
+                         maxPoints: activityData.points,
+                         unidade: activityData.unidade as Unidade,
+                         materia: activityData.materia || 'Geral'
+                     }, activityData.className);
                  }
 
                  return true;
              }
              return false;
-        } catch (error: any) { console.error(error); addToast("Erro ao salvar nota.", "error"); return false; }
+        } catch (error: any) { 
+            console.error(error); 
+            addToast(`Erro ao salvar nota: ${error.message}`, "error"); 
+            return false; 
+        }
     }, [user, addToast, setTeacherClasses, recalculateStudentGradeSummary]);
 
     const handleDeleteActivity = useCallback(async (activityId: string) => {

@@ -1,12 +1,13 @@
 
 import React, { useState, useMemo } from 'react';
-import { useTeacherAcademicContext } from '../contexts/TeacherAcademicContext';
 import { useTeacherClassContext } from '../contexts/TeacherClassContext';
 import { Card } from './common/Card';
-import { useNavigation } from '../contexts/NavigationContext'; // Import Navigation
+import { useNavigation } from '../contexts/NavigationContext';
 import type { Activity, PendingActivity } from '../types';
 import { db } from './firebaseClient';
 import { doc, getDoc } from 'firebase/firestore';
+import { usePendingActivities } from '../hooks/teacher/usePendingActivities';
+import { useAuth } from '../contexts/AuthContext';
 
 const PendingActivityItem: React.FC<{ item: PendingActivity; onView: () => void }> = ({ item, onView }) => (
     <button 
@@ -29,13 +30,15 @@ const PendingActivityItem: React.FC<{ item: PendingActivity; onView: () => void 
 );
 
 const PendingActivities: React.FC = () => {
-    const { allPendingActivities } = useTeacherAcademicContext();
+    const { user } = useAuth();
     const { teacherClasses } = useTeacherClassContext();
-    const { startGrading } = useNavigation(); // Use navigation action
+    const { startGrading } = useNavigation();
     const [selectedClassId, setSelectedClassId] = useState('all');
-    const [isLoading, setIsLoading] = useState(false);
+    const [isActionLoading, setIsActionLoading] = useState(false);
 
-    // Use the centralized `allPendingActivities` list and filter it locally.
+    // Fetch directly from hook
+    const { data: allPendingActivities = [], isLoading: isFetching } = usePendingActivities(user?.id);
+
     const pendingActivities = useMemo((): PendingActivity[] => {
         if (selectedClassId === 'all') {
             return allPendingActivities;
@@ -44,10 +47,8 @@ const PendingActivities: React.FC = () => {
     }, [allPendingActivities, selectedClassId]);
 
     const handleOpenGrading = async (pendingItem: PendingActivity) => {
-        setIsLoading(true);
+        setIsActionLoading(true);
         try {
-            // Fetch minimal activity data to pass to context
-            // The full grading view will fetch submissions on its own.
             const activityRef = doc(db, "activities", pendingItem.id);
             const activitySnap = await getDoc(activityRef);
             
@@ -60,9 +61,11 @@ const PendingActivities: React.FC = () => {
         } catch (error) {
             console.error("Error preparing grading:", error);
         } finally {
-            setIsLoading(false);
+            setIsActionLoading(false);
         }
     };
+
+    const isLoading = isFetching || isActionLoading;
 
     return (
         <div className="space-y-6">

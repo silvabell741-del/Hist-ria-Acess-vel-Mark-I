@@ -1,12 +1,16 @@
 
 import React, { useState, useContext } from 'react';
-import type { Notification } from '../types';
+import type { Notification, Activity } from '../types';
 import { Card } from './common/Card';
 import { useAuth } from '../contexts/AuthContext';
 import { useStudentNotificationsContext } from '../contexts/StudentNotificationContext';
 import { useTeacherCommunicationContext } from '../contexts/TeacherCommunicationContext';
 import { useNavigation } from '../contexts/NavigationContext';
 import { useSettings } from '../contexts/SettingsContext';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from './firebaseClient';
+import { useToast } from '../contexts/ToastContext';
+import { SpinnerIcon } from '../constants/index';
 
 interface NotificationsPageProps {}
 
@@ -53,6 +57,7 @@ const NotificationItem: React.FC<{ notification: Notification; onClick: () => vo
 const NotificationsPage: React.FC<NotificationsPageProps> = () => {
     const { userRole } = useAuth();
     const { theme } = useSettings();
+    const { addToast } = useToast();
     
     let studentData: any = {};
     if (userRole === 'aluno') {
@@ -74,9 +79,10 @@ const NotificationsPage: React.FC<NotificationsPageProps> = () => {
     // Fallback seguro caso o contexto não esteja carregado
     const { notifications = [], handleMarkAllNotificationsRead = async () => {}, unreadNotificationCount = 0, handleMarkNotificationAsRead = async () => {} } = data || {};
     
-    const { setCurrentPage } = useNavigation();
+    const { setCurrentPage, openActivity } = useNavigation();
     
     const [isUpdating, setIsUpdating] = useState(false);
+    const [loadingActivityId, setLoadingActivityId] = useState<string | null>(null);
 
     const handleMarkAll = async () => {
         setIsUpdating(true);
@@ -84,11 +90,36 @@ const NotificationsPage: React.FC<NotificationsPageProps> = () => {
         setIsUpdating(false);
     };
 
-    const handleNotificationClick = (notification: Notification) => {
+    const handleNotificationClick = async (notification: Notification) => {
         if (!notification.read && handleMarkNotificationAsRead) {
             handleMarkNotificationAsRead(notification.id);
         }
-        setCurrentPage(notification.deepLink.page);
+
+        // Navegação Inteligente
+        if (notification.deepLink.id && notification.deepLink.page === 'student_activity_view') {
+            setLoadingActivityId(notification.id);
+            try {
+                const activityRef = doc(db, "activities", notification.deepLink.id);
+                const activitySnap = await getDoc(activityRef);
+                
+                if (activitySnap.exists()) {
+                    const activityData = { id: activitySnap.id, ...activitySnap.data() } as Activity;
+                    openActivity(activityData);
+                } else {
+                    addToast("Atividade não encontrada ou excluída.", "error");
+                    setCurrentPage('activities');
+                }
+            } catch (error) {
+                console.error("Erro ao carregar atividade da notificação:", error);
+                addToast("Erro ao abrir atividade.", "error");
+                setCurrentPage('activities');
+            } finally {
+                setLoadingActivityId(null);
+            }
+        } else {
+            // Fallback padrão
+            setCurrentPage(notification.deepLink.page);
+        }
     };
 
     return (
@@ -103,6 +134,14 @@ const NotificationsPage: React.FC<NotificationsPageProps> = () => {
                     {isUpdating ? 'Marcando...' : 'Marcar todas como lidas'}
                 </button>
             </div>
+            {loadingActivityId && (
+                <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50 backdrop-blur-sm">
+                    <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-lg flex items-center">
+                        <SpinnerIcon className="h-6 w-6 text-indigo-600 mr-3" />
+                        <span className="text-slate-700 dark:text-slate-200">Carregando atividade...</span>
+                    </div>
+                </div>
+            )}
             <Card className="p-2 sm:p-4">
                 {notifications.length > 0 ? (
                     <ul className="space-y-2">

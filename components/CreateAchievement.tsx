@@ -1,19 +1,11 @@
+
 import React, { useState, useEffect } from 'react';
 import type { Achievement } from '../types';
 import { Card } from './common/Card';
 import { ICONS, SpinnerIcon } from '../constants/index';
 import { useAdminData } from '../contexts/AdminDataContext';
 import { useNavigation } from '../contexts/NavigationContext';
-
-const InputField: React.FC<{ label: string, required?: boolean, children: React.ReactNode, helperText?: string }> = ({ label, required, children, helperText }) => (
-    <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1 hc-text-secondary">
-            {label} {required && <span className="text-red-500">*</span>}
-        </label>
-        {children}
-        {helperText && <p className="mt-1 text-xs text-gray-500 dark:text-slate-400 hc-text-secondary">{helperText}</p>}
-    </div>
-);
+import { InputField } from './common/FormHelpers';
 
 const CreateAchievement: React.FC = () => {
     const { handleSaveAchievement, handleUpdateAchievement, handleDeleteAchievement, isSubmitting } = useAdminData();

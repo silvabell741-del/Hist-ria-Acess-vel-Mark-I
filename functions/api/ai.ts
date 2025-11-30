@@ -1,5 +1,16 @@
 
-export async function onRequestPost(context) {
+interface Env {
+  GEMINI_API_KEY: string;
+}
+
+interface RequestBody {
+  contents: any[];
+  config?: any;
+  model?: string;
+  systemInstruction?: string;
+}
+
+export const onRequestPost = async (context: { request: Request; env: Env }) => {
   try {
     const { request, env } = context;
 
@@ -22,11 +33,8 @@ export async function onRequestPost(context) {
         headers: { "Content-Type": "application/json", ...corsHeaders }
       });
     }
-    // Nota: A validação completa da assinatura do JWT exigiria uma biblioteca como 'jose' ou 'firebase-admin'.
-    // Como estamos num ambiente edge simples sem build step complexo aqui, verificamos a presença.
-    // Em produção real, você deve validar a assinatura criptográfica.
 
-    const body = await request.json();
+    const body = await request.json() as RequestBody;
     
     // Recupera a chave da variável de ambiente do Cloudflare
     const apiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
@@ -44,7 +52,7 @@ export async function onRequestPost(context) {
     // Monta a URL da API REST do Google
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-    const googlePayload = {
+    const googlePayload: any = {
       contents: contents,
       generationConfig: config,
     };
@@ -73,12 +81,12 @@ export async function onRequestPost(context) {
       headers: { "Content-Type": "application/json", ...corsHeaders }
     });
 
-  } catch (err) {
+  } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
   }
-}
+};
 
-export async function onRequestOptions() {
+export const onRequestOptions = async () => {
   return new Response(null, {
     headers: {
       "Access-Control-Allow-Origin": "*",
@@ -86,4 +94,4 @@ export async function onRequestOptions() {
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
     },
   });
-}
+};

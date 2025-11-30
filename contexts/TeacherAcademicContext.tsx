@@ -6,6 +6,7 @@ import { useTeacherContent } from '../hooks/teacher/useTeacherContent';
 import { useTeacherClassContext } from './TeacherClassContext';
 import type { Module, Activity, PendingActivity } from '../types';
 import { useQueryClient } from '@tanstack/react-query';
+import { usePendingActivities } from '../hooks/teacher/usePendingActivities';
 
 export interface TeacherAcademicContextType {
     modules: Module[];
@@ -40,19 +41,21 @@ export const TeacherAcademicContext = createContext<TeacherAcademicContextType |
 export function TeacherAcademicProvider({ children }: { children?: React.ReactNode }) {
     const { user } = useAuth();
     const { addToast } = useToast();
-    const queryClient = useQueryClient(); // React Query Client
+    const queryClient = useQueryClient();
     
-    // Consome dados de turmas para passar ao hook de conteúdo (necessário para atualizações otimistas)
     const { teacherClasses, setTeacherClasses } = useTeacherClassContext();
 
     const contentData = useTeacherContent(user, addToast, setTeacherClasses, teacherClasses);
+    
+    // Use the React Query hook for pending activities
+    // This ensures consistency across the app (Badge vs Pending List)
+    const { data: pendingActivities = [] } = usePendingActivities(user?.id);
 
     // --- Wrapper Functions para Invalidação Cirúrgica ---
 
     const handleSaveActivityWrapper = async (activity: Omit<Activity, 'id'>, isDraft?: boolean) => {
         const result = await contentData.handleSaveActivity(activity, isDraft);
         if (result && !isDraft) {
-            // Invalida cache de atividades para que os alunos vejam a nova atividade
             queryClient.invalidateQueries({ queryKey: ['activities'] });
         }
         return result;
@@ -74,7 +77,6 @@ export function TeacherAcademicProvider({ children }: { children?: React.ReactNo
     const handleSaveModuleWrapper = async (module: Omit<Module, 'id'>, isDraft?: boolean) => {
         const result = await contentData.handleSaveModule(module, isDraft);
         if (result && !isDraft) {
-            // Invalida cache de módulos para alunos
             queryClient.invalidateQueries({ queryKey: ['modules'] });
         }
         return result;
@@ -100,25 +102,23 @@ export function TeacherAcademicProvider({ children }: { children?: React.ReactNo
         queryClient.invalidateQueries({ queryKey: ['modules'] });
     };
 
-    // --- Computed Properties ---
-
     const dashboardStats = useMemo(() => {
         const myModulesCount = contentData.modules.filter(m => m.creatorId === user?.id).length;
         return {
             totalClasses: teacherClasses.length,
             totalStudents: teacherClasses.reduce((acc, c) => acc + (c.studentCount || (c.students || []).length || 0), 0),
             totalModulesCreated: myModulesCount,
-            totalPendingSubmissions: contentData.pendingActivitiesList.reduce((acc, a) => acc + a.pendingCount, 0)
+            // Calculate pending from the RQ hook data instead of manual state
+            totalPendingSubmissions: pendingActivities.reduce((acc, a) => acc + a.pendingCount, 0)
         };
-    }, [teacherClasses, contentData.modules, contentData.pendingActivitiesList, user?.id]);
+    }, [teacherClasses, contentData.modules, pendingActivities, user?.id]);
 
-    // --- Legacy/Future Placeholders ---
+    // Placeholders
     const handleModuleProgressUpdate = async () => {};
     const handleModuleComplete = async () => {};
     
     const value = {
         ...contentData,
-        // Override methods with wrappers that include invalidation
         handleSaveActivity: handleSaveActivityWrapper,
         handleUpdateActivity: handleUpdateActivityWrapper,
         handleDeleteActivity: handleDeleteActivityWrapper,
@@ -127,7 +127,7 @@ export function TeacherAcademicProvider({ children }: { children?: React.ReactNo
         handlePublishModuleDraft: handlePublishModuleDraftWrapper,
         handleDeleteModule: handleDeleteModuleWrapper,
         
-        allPendingActivities: contentData.pendingActivitiesList, // Use list directly from hook
+        allPendingActivities: pendingActivities, // Expose RQ data
         dashboardStats,
         handleModuleProgressUpdate,
         handleModuleComplete

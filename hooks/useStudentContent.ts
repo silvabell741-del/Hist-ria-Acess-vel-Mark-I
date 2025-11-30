@@ -1,33 +1,26 @@
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { 
     collection, query, where, getDocs, doc, getDoc, 
-    orderBy, limit, startAfter, QueryDocumentSnapshot,
-    updateDoc, arrayUnion, arrayRemove, increment, addDoc, serverTimestamp, setDoc, writeBatch, documentId, collectionGroup
+    limit, updateDoc, arrayUnion, increment, 
+    serverTimestamp, setDoc, writeBatch, documentId, collectionGroup
 } from 'firebase/firestore';
 import { db } from '../components/firebaseClient';
 import { useToast } from '../contexts/ToastContext';
 import type { Module, Quiz, Activity, TeacherClass, User, ActivitySubmission } from '../types';
 import { createNotification } from '../utils/createNotification';
 import { processGamificationEvent } from '../utils/gamificationEngine';
-import { useSync } from '../contexts/SyncContext'; // Import SyncContext
-
-const ACTIVITIES_PER_PAGE = 10;
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 export function useStudentContent(user: User | null) {
     const { addToast } = useToast();
-    const { addOfflineAction } = useSync(); // Use Sync Hook
+    const queryClient = useQueryClient();
     
-    // Estados separados para diferentes tipos de dados
-    const [inProgressModules, setInProgressModules] = useState<Module[]>([]);
+    // UI State (Search/Filters)
     const [searchedModules, setSearchedModules] = useState<Module[]>([]);
     const [searchedQuizzes, setSearchedQuizzes] = useState<Quiz[]>([]);
+    const [isSearchingQuizzes, setIsSearchingQuizzes] = useState(false);
     
-    // Mapa de submissões do usuário: ActivityID -> Submission Data
-    // Usado para verificar status "Feito" ou "Nota" na lista de atividades sem ler arrays gigantes
-    const [userSubmissions, setUserSubmissions] = useState<Record<string, ActivitySubmission>>({});
-
-    // Filtros persistidos
     const [moduleFilters, setModuleFilters] = useState({
         queryText: '',
         serie: 'all',
@@ -35,152 +28,300 @@ export function useStudentContent(user: User | null) {
         status: 'Em andamento',
         scope: 'my_modules' as 'my_modules' | 'public'
     });
-    
-    const [studentClasses, setStudentClasses] = useState<TeacherClass[]>([]);
-    
-    const [isLoading, setIsLoading] = useState(true);
-    const [isSearchingModules, setIsSearchingModules] = useState(false);
-    const [isSearchingQuizzes, setIsSearchingQuizzes] = useState(false);
-    
-    // --- CORE REFRESH LOGIC (Graceful Degradation) ---
-    // Optimization: Only load Classes and Progress. Modules/Activities are handled by Infinite Query components.
-    const refreshContent = useCallback(async (forceRefresh = false) => {
-        if (!user || user.role !== 'aluno') {
-            setIsLoading(false);
-            return;
-        }
-        
-        setIsLoading(true);
 
-        // 1. Função independente para buscar turmas
-        const fetchClasses = async () => {
-            try {
-                const classesQuery = query(
-                    collection(db, "classes"), 
-                    where("studentIds", "array-contains", user.id)
-                );
-                const classesSnap = await getDocs(classesQuery);
+    const isStudent = user?.role === 'aluno';
 
-                const myClasses: TeacherClass[] = [];
-                
-                classesSnap.docs.forEach(d => {
+    // --- 1. QUERY: Student Classes ---
+    const { data: studentClasses = [], isLoading: isLoadingClasses } = useQuery({
+        queryKey: ['studentClasses', user?.id],
+        queryFn: async () => {
+            if (!user) return [];
+            const classesQuery = query(
+                collection(db, "classes"), 
+                where("studentIds", "array-contains", user.id)
+            );
+            const classesSnap = await getDocs(classesQuery);
+            return classesSnap.docs
+                .map(d => {
                     const data = d.data();
                     const studentRecord = (data.students || []).find((s: any) => s.id === user.id);
-                    if (!studentRecord || studentRecord.status !== 'inactive') {
-                        const notices = (Array.isArray(data.notices) ? data.notices : []).map((n: any) => ({
-                            ...n,
-                            timestamp: n.timestamp?.toDate ? n.timestamp.toDate().toISOString() : n.timestamp
-                        }));
-                        myClasses.push({ id: d.id, ...data, notices } as TeacherClass);
-                    }
-                });
-                
-                setStudentClasses(myClasses);
-            } catch (error: any) {
-                console.warn("Falha parcial ao carregar turmas:", error);
-                if (error.code !== 'permission-denied') {
-                    if (navigator.onLine) {
-                        addToast("Não foi possível carregar suas turmas.", "error");
-                    }
+                    if (studentRecord && studentRecord.status === 'inactive') return null;
+
+                    const notices = (Array.isArray(data.notices) ? data.notices : []).map((n: any) => ({
+                        ...n,
+                        timestamp: n.timestamp?.toDate ? n.timestamp.toDate().toISOString() : n.timestamp
+                    }));
+                    return { id: d.id, ...data, notices } as TeacherClass;
+                })
+                .filter((c): c is TeacherClass => c !== null);
+        },
+        enabled: isStudent && !!user,
+        staleTime: 1000 * 60 * 30, // 30 minutes stale
+    });
+
+    // --- 2. QUERY: Module Progress ---
+    const { data: inProgressModules = [], isLoading: isLoadingProgress } = useQuery({
+        queryKey: ['studentModulesProgress', user?.id],
+        queryFn: async () => {
+            if (!user) return [];
+            const progressColRef = collection(db, "users", user.id, "modulesProgress");
+            const progressSnap = await getDocs(progressColRef);
+            
+            const modulesToFetch: string[] = [];
+            const progressMap: Record<string, number> = {};
+
+            progressSnap.forEach(doc => {
+                const data = doc.data();
+                if (data.progress > 0 && data.progress < 100) {
+                    modulesToFetch.push(doc.id);
+                    progressMap[doc.id] = data.progress;
                 }
-                setStudentClasses([]);
+            });
+
+            if (modulesToFetch.length === 0) return [];
+
+            const chunks = [];
+            for (let i = 0; i < modulesToFetch.length; i += 10) {
+                chunks.push(modulesToFetch.slice(i, i + 10));
             }
-        };
 
-        // 2. Função independente para buscar progresso de módulos
-        const fetchProgress = async () => {
-            try {
-                const progressColRef = collection(db, "users", user.id, "modulesProgress");
-                const progressSnap = await getDocs(progressColRef);
-                
-                const modulesToFetch: string[] = [];
-                const progressMap: Record<string, number> = {};
-
-                progressSnap.forEach(doc => {
-                    const data = doc.data();
-                    if (data.progress > 0 && data.progress < 100) {
-                        modulesToFetch.push(doc.id);
-                        progressMap[doc.id] = data.progress;
-                    }
+            const fetchedModules: Module[] = [];
+            for (const chunk of chunks) {
+                const q = query(collection(db, "modules"), where(documentId(), "in", chunk));
+                const snap = await getDocs(q);
+                snap.forEach(d => {
+                    fetchedModules.push({ 
+                        id: d.id, 
+                        ...d.data(), 
+                        progress: progressMap[d.id] 
+                    } as Module);
                 });
-
-                if (modulesToFetch.length > 0) {
-                    const chunks = [];
-                    for (let i = 0; i < modulesToFetch.length; i += 10) {
-                        chunks.push(modulesToFetch.slice(i, i + 10));
-                    }
-
-                    const fetchedModules: Module[] = [];
-                    for (const chunk of chunks) {
-                        const q = query(collection(db, "modules"), where(documentId(), "in", chunk));
-                        const snap = await getDocs(q);
-                        snap.forEach(d => {
-                            fetchedModules.push({ 
-                                id: d.id, 
-                                ...d.data(), 
-                                progress: progressMap[d.id] 
-                            } as Module);
-                        });
-                    }
-                    setInProgressModules(fetchedModules);
-                } else {
-                    setInProgressModules([]);
-                }
-            } catch (error: any) {
-                console.warn("Falha parcial ao carregar progresso:", error);
-                setInProgressModules([]);
             }
-        };
+            return fetchedModules;
+        },
+        enabled: isStudent && !!user,
+    });
 
-        // 3. Buscar todas as submissões do aluno (Collection Group)
-        // Isso permite saber quais atividades o aluno já fez sem ler os documentos das atividades
-        const fetchSubmissions = async () => {
+    // --- 3. QUERY: User Submissions ---
+    const { data: userSubmissions = {}, isLoading: isLoadingSubmissions } = useQuery({
+        queryKey: ['studentSubmissions', user?.id],
+        queryFn: async () => {
+            if (!user) return {};
             try {
-                // Query em todas as coleções chamadas 'submissions' onde studentId é o usuário atual.
-                // Isso exige que o documento de submissão tenha o campo 'studentId'.
                 const q = query(collectionGroup(db, 'submissions'), where('studentId', '==', user.id));
                 const snap = await getDocs(q);
                 
                 const subsMap: Record<string, ActivitySubmission> = {};
                 snap.forEach(d => {
-                    // O pai do documento de submissão é a atividade
                     const activityId = d.ref.parent.parent?.id; 
                     if (activityId) {
                         subsMap[activityId] = d.data() as ActivitySubmission;
                     }
                 });
-                setUserSubmissions(subsMap);
+                return subsMap;
             } catch (error: any) {
-                // Tratamento silencioso para permissões ou falta de índice
-                if (error.code === 'permission-denied' || error.code === 'failed-precondition') {
-                    // console.debug("Fetch submissions collectionGroup skipped:", error.message);
-                    // Não limpamos userSubmissions aqui para manter estado otimista se houver
-                } else {
-                    console.warn("Falha ao carregar submissões:", error);
-                }
+                return {};
             }
-        };
+        },
+        enabled: isStudent && !!user,
+        staleTime: 1000 * 60 * 5 // 5 minutes
+    });
 
-        // Executa em paralelo
-        await Promise.allSettled([fetchClasses(), fetchProgress(), fetchSubmissions()]);
-        
-        setIsLoading(false);
-    }, [user, addToast]);
+    // --- MUTATIONS ---
 
-    useEffect(() => {
-        if (user) {
-            refreshContent();
+    const joinClassMutation = useMutation({
+        mutationFn: async (code: string) => {
+            if (!user) throw new Error("User not authenticated");
+            const q = query(collection(db, "classes"), where("code", "==", code));
+            const querySnapshot = await getDocs(q);
+
+            if (querySnapshot.empty) {
+                throw new Error("Turma não encontrada com este código.");
+            }
+
+            const classDoc = querySnapshot.docs[0];
+            const classData = classDoc.data();
+
+            if (classData.studentIds?.includes(user.id)) {
+                const currentStudents = classData.students || [];
+                const me = currentStudents.find((s: any) => s.id === user.id);
+                if (me && me.status === 'inactive') {
+                    const updatedStudents = currentStudents.map((s: any) => 
+                        s.id === user.id ? { ...s, status: 'active' } : s
+                    );
+                    await updateDoc(doc(db, "classes", classDoc.id), {
+                        students: updatedStudents,
+                        studentCount: increment(1)
+                    });
+                    return { success: true, message: `Bem-vindo de volta à turma ${classData.name}!` };
+                }
+                return { success: false, message: "Você já está nesta turma." };
+            }
+
+            const classRef = doc(db, "classes", classDoc.id);
+            await updateDoc(classRef, {
+                studentIds: arrayUnion(user.id),
+                students: arrayUnion({ id: user.id, name: user.name, avatarUrl: user.avatarUrl || "", status: 'active' }),
+                studentCount: increment(1)
+            });
+
+            return { success: true, message: `Você entrou na turma ${classData.name}!` };
+        },
+        onSuccess: (data) => {
+            if (data.success) {
+                addToast(data.message, "success");
+                queryClient.invalidateQueries({ queryKey: ['studentClasses'] });
+            } else {
+                addToast(data.message, "info");
+            }
+        },
+        onError: (error: any) => {
+            addToast(error.message || "Erro ao entrar na turma.", "error");
         }
-    }, [user, refreshContent]);
+    });
 
+    const leaveClassMutation = useMutation({
+        mutationFn: async (classId: string) => {
+            if (!user) throw new Error("User not authenticated");
+            const classRef = doc(db, "classes", classId);
+            const classSnap = await getDoc(classRef);
+            
+            if (classSnap.exists()) {
+                const classData = classSnap.data();
+                const currentStudents = classData.students || [];
+                const updatedStudents = currentStudents.map((s: any) => {
+                    if (s.id === user.id) {
+                        return { ...s, status: 'inactive' };
+                    }
+                    return s;
+                });
+                await updateDoc(classRef, {
+                    students: updatedStudents,
+                    studentCount: increment(-1)
+                });
+            }
+        },
+        onSuccess: () => {
+            addToast("Você saiu da turma.", "success");
+            queryClient.invalidateQueries({ queryKey: ['studentClasses'] });
+        },
+        onError: () => {
+            addToast("Erro ao sair da turma.", "error");
+        }
+    });
 
-    // --- SEARCH MODULES (Legacy Wrapper) ---
-    const searchModules = useCallback(async (filters: any) => {
-        // Implementation replaced by React Query in components
-    }, []);
+    const submitActivityMutation = useMutation({
+        mutationFn: async ({ activityId, content }: { activityId: string, content: string }) => {
+            if (!user) throw new Error("User not authenticated");
 
+            const activityRef = doc(db, "activities", activityId);
+            const activitySnap = await getDoc(activityRef);
+            
+            if (!activitySnap.exists()) throw new Error("Atividade não existe");
+            const activityData = activitySnap.data() as Activity;
 
-    // --- SEARCH QUIZZES (On Demand) ---
+            // Grade Calculation
+            let answersMap: Record<string, string> = {};
+            try { answersMap = JSON.parse(content); } catch { /* legacy */ }
+
+            let calculatedGrade = 0;
+            let hasTextQuestions = false;
+            const items = activityData.items || [];
+
+            if (items.length > 0) {
+                items.forEach(item => {
+                    if (item.type === 'text') hasTextQuestions = true;
+                    else if (item.type === 'multiple_choice' && item.correctOptionId) {
+                        if (answersMap[item.id] === item.correctOptionId) calculatedGrade += (item.points || 0);
+                    }
+                });
+            }
+
+            const gradingMode = activityData.gradingConfig?.objectiveQuestions || 'automatic';
+            let status: 'Aguardando correção' | 'Corrigido' = 'Aguardando correção';
+            
+            if (gradingMode === 'automatic' && !hasTextQuestions && items.length > 0) {
+                status = 'Corrigido';
+            }
+
+            const submissionData: ActivitySubmission = {
+                studentId: user.id,
+                studentName: user.name,
+                studentAvatarUrl: user.avatarUrl || '', 
+                studentSeries: user.series || '', 
+                submissionDate: new Date().toISOString(),
+                content: content,
+                status: status,
+            };
+
+            if (status === 'Corrigido') {
+                submissionData.grade = calculatedGrade;
+                submissionData.gradedAt = new Date().toISOString();
+                submissionData.feedback = "Correção automática.";
+            }
+
+            // Write to subcollection
+            const submissionRef = doc(db, "activities", activityId, "submissions", user.id);
+            const submissionSnap = await getDoc(submissionRef);
+            const isUpdate = submissionSnap.exists();
+
+            await setDoc(submissionRef, { ...submissionData, timestamp: serverTimestamp() }, { merge: true });
+
+            // Counters
+            if (!isUpdate) {
+                await updateDoc(activityRef, {
+                    submissionCount: increment(1),
+                    pendingSubmissionCount: increment(status === 'Aguardando correção' ? 1 : 0)
+                });
+            }
+
+            // Notifications & Gamification
+            if (status === 'Corrigido') {
+                 await createNotification({
+                    userId: user.id, actorId: 'system', actorName: 'Sistema', type: 'activity_correction',
+                    title: 'Atividade Corrigida Automaticamente', text: `Sua atividade "${activityData.title}" foi corrigida. Nota: ${calculatedGrade}`,
+                    classId: activityData.classId!, activityId: activityId
+                });
+            }
+
+            await processGamificationEvent(user.id, 'activity_sent', 0);
+            return { success: true };
+        },
+        onSuccess: () => {
+            addToast("Atividade enviada com sucesso!", "success");
+            queryClient.invalidateQueries({ queryKey: ['studentSubmissions'] });
+            queryClient.invalidateQueries({ queryKey: ['activities'] });
+        },
+        onError: (error: any) => {
+            console.error("Submission error:", error);
+            if (error.code === 'permission-denied') {
+                addToast("Erro de permissão. Tente recarregar.", "error");
+            } else {
+                addToast("Erro ao enviar. Tente novamente.", "error");
+            }
+        }
+    });
+
+    const handleJoinClass = async (code: string) => {
+        const result = await joinClassMutation.mutateAsync(code);
+        return result?.success || false;
+    };
+
+    const handleLeaveClass = (classId: string) => {
+        leaveClassMutation.mutate(classId);
+    };
+
+    const handleActivitySubmit = async (activityId: string, content: string) => {
+        // Direct mutation call. Firebase SDK handles offline queuing natively now.
+        // We catch errors to inform the user if something critical fails immediately (e.g. auth issues).
+        // Network errors are retried by Firebase internally when connection restores.
+        try {
+            await submitActivityMutation.mutateAsync({ activityId, content });
+        } catch (e) {
+            // Error is handled in onError of mutation
+        }
+    };
+
     const searchQuizzes = useCallback(async (filters: { 
         serie?: string; 
         materia?: string;
@@ -191,11 +332,7 @@ export function useStudentContent(user: User | null) {
         setSearchedQuizzes([]);
 
         try {
-            let q = query(
-                collection(db, "quizzes"),
-                where("status", "==", "Ativo"),
-                limit(20)
-            );
+            let q = query(collection(db, "quizzes"), where("status", "==", "Ativo"), limit(20));
 
             if (filters.serie && filters.serie !== 'all') {
                 q = query(q, where("series", "array-contains", filters.serie));
@@ -223,10 +360,7 @@ export function useStudentContent(user: User | null) {
                 attemptsSnap.forEach(d => attemptsMap[d.id] = d.data().attempts || 0);
             } catch(e) { /* ignore */ }
 
-            const finalQuizzes = results.map(qz => ({
-                ...qz,
-                attempts: attemptsMap[qz.id] || 0
-            }));
+            const finalQuizzes = results.map(qz => ({ ...qz, attempts: attemptsMap[qz.id] || 0 }));
 
             let filteredByStatus = finalQuizzes;
             if (filters.status && filters.status !== 'all') {
@@ -238,9 +372,8 @@ export function useStudentContent(user: User | null) {
             }
 
             setSearchedQuizzes(filteredByStatus);
-
-            if (filteredByStatus.length === 0) {
-                if (navigator.onLine) addToast("Nenhum quiz encontrado.", "info");
+            if (filteredByStatus.length === 0 && navigator.onLine) {
+                addToast("Nenhum quiz encontrado.", "info");
             }
 
         } catch (error) {
@@ -251,305 +384,43 @@ export function useStudentContent(user: User | null) {
         }
     }, [user, addToast]);
 
-
-    // --- SEARCH ACTIVITIES (Legacy Wrapper) ---
-    const searchActivities = useCallback(async (
-        filters: any,
-        lastDoc?: QueryDocumentSnapshot | null
-    ): Promise<any> => {
-        // Implementation replaced by React Query in components
-        return { activities: [], lastDoc: null };
-    }, []);
-
-
-    // --- ACTIONS ---
-    const handleJoinClass = async (code: string): Promise<boolean> => {
-        if (!user) return false;
-        try {
-            const q = query(collection(db, "classes"), where("code", "==", code));
-            const querySnapshot = await getDocs(q);
-
-            if (querySnapshot.empty) {
-                addToast("Turma não encontrada com este código.", "error");
-                return false;
-            }
-
-            const classDoc = querySnapshot.docs[0];
-            const classData = classDoc.data();
-
-            if (classData.studentIds?.includes(user.id)) {
-                const currentStudents = classData.students || [];
-                const me = currentStudents.find((s: any) => s.id === user.id);
-                
-                if (me && me.status === 'inactive') {
-                    const updatedStudents = currentStudents.map((s: any) => 
-                        s.id === user.id ? { ...s, status: 'active' } : s
-                    );
-                    
-                    await updateDoc(doc(db, "classes", classDoc.id), {
-                        students: updatedStudents,
-                        studentCount: increment(1)
-                    });
-                    addToast(`Bem-vindo de volta à turma ${classData.name}!`, "success");
-                    await refreshContent(true);
-                    return true;
-                }
-
-                addToast("Você já está nesta turma.", "info");
-                return false;
-            }
-
-            const classRef = doc(db, "classes", classDoc.id);
-            await updateDoc(classRef, {
-                studentIds: arrayUnion(user.id),
-                students: arrayUnion({ id: user.id, name: user.name, avatarUrl: user.avatarUrl || "", status: 'active' }),
-                studentCount: increment(1)
-            });
-
-            addToast(`Você entrou na turma ${classData.name}!`, "success");
-            await refreshContent(true); 
-            return true;
-        } catch (error) {
-            console.error("Error joining class:", error);
-            addToast("Erro ao entrar na turma.", "error");
-            return false;
-        }
+    const refreshContent = async (force?: boolean) => {
+        await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['studentClasses'] }),
+            queryClient.invalidateQueries({ queryKey: ['studentModulesProgress'] }),
+            queryClient.invalidateQueries({ queryKey: ['studentSubmissions'] })
+        ]);
     };
-
-    const handleLeaveClass = async (classId: string) => {
-        if (!user) return;
-        try {
-            const classRef = doc(db, "classes", classId);
-            const classSnap = await getDoc(classRef);
-            
-            if (classSnap.exists()) {
-                const classData = classSnap.data();
-                const currentStudents = classData.students || [];
-                
-                const updatedStudents = currentStudents.map((s: any) => {
-                    if (s.id === user.id) {
-                        return { ...s, status: 'inactive' };
-                    }
-                    return s;
-                });
-
-                await updateDoc(classRef, {
-                    students: updatedStudents,
-                    studentCount: increment(-1)
-                });
-
-                setStudentClasses(prev => prev.filter(c => c.id !== classId));
-                addToast("Você saiu da turma.", "success");
-            }
-        } catch (error) {
-            console.error("Error leaving class:", error);
-            addToast("Erro ao sair da turma. Verifique sua conexão.", "error");
-            throw error;
-        }
-    };
-
-    const handleActivitySubmit = async (activityId: string, content: string) => {
-        if (!user) return;
-
-        // OFFLINE QUEUE CHECK
-        if (!navigator.onLine) {
-            try {
-                let activityData: any = {};
-                const activityRef = doc(db, "activities", activityId);
-                const activitySnap = await getDoc(activityRef); 
-                if (activitySnap.exists()) {
-                    activityData = activitySnap.data();
-                }
-
-                await addOfflineAction('SUBMIT_ACTIVITY', {
-                    activityId,
-                    content,
-                    user: { id: user.id, name: user.name },
-                    activityData 
-                });
-
-                addToast("Sem conexão. Salvo para envio automático.", "info");
-                return;
-
-            } catch (e) {
-                console.error("Failed to queue offline action", e);
-                addToast("Erro ao salvar offline.", "error");
-                return;
-            }
-        }
-
-        // ONLINE FLOW
-        try {
-            const activityRef = doc(db, "activities", activityId);
-            const activitySnap = await getDoc(activityRef);
-            
-            if (!activitySnap.exists()) throw new Error("Atividade não existe");
-            const activityData = activitySnap.data() as Activity;
-
-            let answersMap: Record<string, string> = {};
-            try { answersMap = JSON.parse(content); } catch { /* legacy text */ }
-
-            let calculatedGrade = 0;
-            let hasTextQuestions = false;
-            const items = activityData.items || [];
-
-            if (items.length > 0) {
-                items.forEach(item => {
-                    if (item.type === 'text') {
-                        hasTextQuestions = true;
-                    } else if (item.type === 'multiple_choice' && item.correctOptionId) {
-                        if (answersMap[item.id] === item.correctOptionId) {
-                            calculatedGrade += (item.points || 0);
-                        }
-                    }
-                });
-            }
-
-            const gradingMode = activityData.gradingConfig?.objectiveQuestions || 'automatic';
-            let status: 'Aguardando correção' | 'Corrigido' = 'Aguardando correção';
-            
-            if (gradingMode === 'automatic' && !hasTextQuestions && items.length > 0) {
-                status = 'Corrigido';
-            }
-
-            // DENORMALIZATION: Student info stored in subcollection document
-            const submissionData: ActivitySubmission = {
-                studentId: user.id,
-                studentName: user.name,
-                studentAvatarUrl: user.avatarUrl || '', 
-                studentSeries: user.series || '', 
-                submissionDate: new Date().toISOString(),
-                content: content,
-                status: status,
-            };
-
-            if (status === 'Corrigido') {
-                submissionData.grade = calculatedGrade;
-                submissionData.gradedAt = new Date().toISOString();
-                submissionData.feedback = "Correção automática.";
-            }
-
-            const submissionRef = doc(db, "activities", activityId, "submissions", user.id);
-            
-            // PHASE 3 OPTIMIZATION: Check if it's an update or new submission
-            // We do a read here to properly maintain counters.
-            let isUpdate = false;
-            try {
-                const submissionSnap = await getDoc(submissionRef);
-                isUpdate = submissionSnap.exists();
-            } catch (readError) {
-                // Se a leitura falhar (ex: documento não existe e regra antiga bloqueava), assumimos que é uma nova submissão.
-                // Com a correção das regras, este erro não deve ocorrer, mas o try/catch previne falha total.
-                console.warn("Não foi possível verificar submissão anterior, assumindo nova.", readError);
-                isUpdate = false;
-            }
-
-            await setDoc(submissionRef, { ...submissionData, timestamp: serverTimestamp() }, { merge: true });
-
-            // SCALABILITY FIX: Do NOT update parent 'submissions' array.
-            // Only update counters atomically.
-            if (!isUpdate) {
-                try {
-                    await updateDoc(activityRef, {
-                        submissionCount: increment(1),
-                        pendingSubmissionCount: increment(status === 'Aguardando correção' ? 1 : 0)
-                    });
-                } catch (updateError: any) {
-                    // Logamos o erro mas não interrompemos, pois o documento principal (submissão) foi salvo.
-                    console.error("Falha ao atualizar contadores da atividade (permissão ou concorrência):", updateError);
-                }
-            }
-
-            // Update local state map immediately
-            setUserSubmissions(prev => ({
-                ...prev,
-                [activityId]: submissionData
-            }));
-
-            if (status === 'Corrigido') {
-                 await createNotification({
-                    userId: user.id, actorId: 'system', actorName: 'Sistema', type: 'activity_correction',
-                    title: 'Atividade Corrigida Automaticamente', text: `Sua atividade "${activityData.title}" foi corrigida. Nota: ${calculatedGrade}`,
-                    classId: activityData.classId!, activityId: activityId
-                });
-            }
-
-            // PROCESSA GAMIFICAÇÃO
-            const unlockedAchievements = await processGamificationEvent(user.id, 'activity_sent', 0);
-            
-            addToast("Atividade enviada com sucesso!", "success");
-            
-            if (unlockedAchievements.length > 0) {
-                unlockedAchievements.forEach(ach => {
-                    addToast(`🏆 Conquista Desbloqueada: ${ach.title}`, 'success');
-                });
-            }
-
-        } catch (error: any) {
-            console.error("Error submitting activity:", error);
-            // Mensagem amigável se for permissão
-            if (error.code === 'permission-denied') {
-                addToast("Erro de permissão ao salvar. Tente recarregar a página.", "error");
-            } else {
-                addToast("Erro ao enviar atividade.", "error");
-            }
-        }
-    };
-
+    
+    // Legacy Placeholders (handled by components)
+    const searchModules = async () => {};
+    const searchActivities = async () => ({ activities: [], lastDoc: null });
+    
     const handleModuleProgressUpdate = async (moduleId: string, progress: number) => {
         if (!user) return;
-        try {
-            const userProgRef = doc(db, "users", user.id, "modulesProgress", moduleId);
-            await setDoc(userProgRef, {
-                progress: Math.round(progress),
-                lastUpdated: serverTimestamp()
-            }, { merge: true });
-            
-            setInProgressModules(prev => prev.map(m => m.id === moduleId ? { ...m, progress } : m));
-            setSearchedModules(prev => prev.map(m => m.id === moduleId ? { ...m, progress } : m));
-        } catch (error) {
-            console.error("Background progress save failed", error);
-        }
+        const ref = doc(db, "users", user.id, "modulesProgress", moduleId);
+        await setDoc(ref, { progress: Math.round(progress), lastUpdated: serverTimestamp() }, { merge: true });
+        queryClient.invalidateQueries({ queryKey: ['studentModulesProgress'] });
     };
-
+    
     const handleModuleComplete = async (moduleId: string) => {
         if (!user) return;
-        try {
-            const userProgRef = doc(db, "users", user.id, "modulesProgress", moduleId);
-            await setDoc(userProgRef, {
-                progress: 100,
-                completedAt: serverTimestamp(),
-                status: 'Concluído'
-            }, { merge: true });
-
-            const unlockedAchievements = await processGamificationEvent(user.id, 'module_complete', 50);
-
-            setInProgressModules(prev => prev.map(m => m.id === moduleId ? { ...m, progress: 100 } : m));
-            setSearchedModules(prev => prev.map(m => m.id === moduleId ? { ...m, progress: 100 } : m));
-            
-            addToast("Módulo concluído! +50 XP", "success");
-            
-            if (unlockedAchievements.length > 0) {
-                unlockedAchievements.forEach(ach => {
-                    addToast(`🏆 Conquista Desbloqueada: ${ach.title}`, 'success');
-                });
-            }
-
-        } catch (error) {
-            console.error("Error completing module:", error);
-            addToast("Erro ao concluir módulo.", "error");
-        }
+        const ref = doc(db, "users", user.id, "modulesProgress", moduleId);
+        await setDoc(ref, { progress: 100, completedAt: serverTimestamp(), status: 'Concluído' }, { merge: true });
+        await processGamificationEvent(user.id, 'module_complete', 50);
+        addToast("Módulo concluído! +50 XP", "success");
+        queryClient.invalidateQueries({ queryKey: ['studentModulesProgress'] });
     };
 
     return {
+        studentClasses,
         inProgressModules,
+        userSubmissions,
         searchedModules,
         searchedQuizzes,
-        studentClasses,
         moduleFilters,
-        userSubmissions, // EXPOSED MAP
-        isLoading,
-        isSearchingModules,
+        isLoading: isLoadingClasses || isLoadingProgress || isLoadingSubmissions,
+        isSearchingModules: false,
         isSearchingQuizzes,
         refreshContent,
         searchModules,

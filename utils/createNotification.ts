@@ -93,7 +93,8 @@ export async function createNotification(params: CreateNotificationParams) {
         urgency = 'medium';
         break;
       case 'activity_correction':
-        deepLink = { page: 'activities' }; // Aluno vê o feedback na lista de atividades
+        // Direciona diretamente para a visualização da atividade específica
+        deepLink = { page: 'student_activity_view', id: params.activityId }; 
         urgency = 'high';
         break;
     }

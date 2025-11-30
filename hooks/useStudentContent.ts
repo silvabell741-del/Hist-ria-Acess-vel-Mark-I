@@ -433,10 +433,18 @@ export function useStudentContent(user: User | null) {
             
             // PHASE 3 OPTIMIZATION: Check if it's an update or new submission
             // We do a read here to properly maintain counters.
-            const submissionSnap = await getDoc(submissionRef);
-            const isUpdate = submissionSnap.exists();
+            let isUpdate = false;
+            try {
+                const submissionSnap = await getDoc(submissionRef);
+                isUpdate = submissionSnap.exists();
+            } catch (readError) {
+                // Se a leitura falhar (ex: documento não existe e regra antiga bloqueava), assumimos que é uma nova submissão.
+                // Com a correção das regras, este erro não deve ocorrer, mas o try/catch previne falha total.
+                console.warn("Não foi possível verificar submissão anterior, assumindo nova.", readError);
+                isUpdate = false;
+            }
 
-            await setDoc(submissionRef, { ...submissionData, timestamp: serverTimestamp() });
+            await setDoc(submissionRef, { ...submissionData, timestamp: serverTimestamp() }, { merge: true });
 
             // SCALABILITY FIX: Do NOT update parent 'submissions' array.
             // Only update counters atomically.

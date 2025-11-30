@@ -126,14 +126,12 @@ service cloud.firestore {
 
       // --- SUBMISSÕES (SUBCOLEÇÃO) ---
       match /submissions/{submissionId} {
-        // LEITURA OTIMIZADA PARA COLLECTION GROUP:
-        // A regra abaixo permite que o aluno leia suas próprias submissões SEM precisar ler o documento pai (atividade).
-        // Isso é crucial para queries do tipo collectionGroup(db, 'submissions').where('studentId', '==', uid) funcionarem.
-        allow read: if resource.data.studentId == request.auth.uid;
+        // LEITURA OTIMIZADA:
+        // 1. Permite leitura se o ID do documento for igual ao ID do usuário (mesmo se o doc não existir ainda).
+        // 2. Permite leitura se o campo studentId dentro do documento for igual ao ID do usuário (para Collection Group queries).
+        allow read: if submissionId == request.auth.uid || resource.data.studentId == request.auth.uid;
         
         // Permite também leitura se for professor dono da atividade (para correção)
-        // Nota: Esta parte requer acesso ao documento pai, então funciona bem para leituras diretas,
-        // mas pode ser lenta ou falhar em collectionGroup queries muito amplas se não indexadas.
         allow read: if isAuthenticated() && get(/databases/$(database)/documents/activities/$(activityId)).data.creatorId == request.auth.uid;
 
         // CRIAR: Aluno cria apenas para si mesmo

@@ -32,6 +32,7 @@ const ModuleCard: React.FC<{
     const isAurora = theme === 'galactic-aurora';
     const isDragon = theme === 'dragon-year';
     const isEmerald = theme === 'emerald-sovereignty';
+    const isAkebono = theme === 'akebono-dawn';
 
     const isCompleted = module.progress === 100;
     const buttonText = isCompleted ? 'Revisar' : (module.progress && module.progress > 0) ? 'Continuar' : 'Iniciar';
@@ -62,6 +63,11 @@ const ModuleCard: React.FC<{
         materiaTagClass = 'bg-[#064E3B] text-[#34D399] border border-[#D4AF37]';
         seriesTagClass = 'bg-[#1F2937] text-[#D4AF37] border border-[#374151]'; 
         buttonClass = "mt-5 w-full font-bold py-3 px-4 rounded-lg text-black bg-gradient-to-r from-[#059669] to-[#34D399] hover:from-[#047857] hover:to-[#10B981] border border-[#047857] transition-all duration-300 shadow-[0_0_10px_rgba(52,211,153,0.5)] hover:shadow-[0_0_20px_rgba(52,211,153,0.8)] flex items-center justify-center hc-button-primary-override";
+    } else if (isAkebono) {
+        materiaTagClass = 'bg-[#FCE4EC] text-[#880E4F] border border-[#F8BBD0]';
+        seriesTagClass = 'bg-[#F1F8E9] text-[#33691E] border border-[#DCEDC8]';
+        // Botão Verde Grama (sem a classe de override global para evitar conflito com o azul padrão do tema)
+        buttonClass = "mt-5 w-full font-bold py-3 px-4 rounded-lg text-white bg-gradient-to-r from-[#66BB6A] to-[#2E7D32] hover:from-[#4CAF50] hover:to-[#1B5E20] border border-[#2E7D32] transition-all duration-300 shadow-md hover:shadow-lg flex items-center justify-center";
     }
 
     const statusDescription = isCompleted ? 'Concluído' : (module.progress && module.progress > 0) ? `Progresso: ${module.progress}%` : 'Não iniciado';

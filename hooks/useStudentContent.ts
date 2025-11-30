@@ -136,7 +136,8 @@ export function useStudentContent(user: User | null) {
         // Isso permite saber quais atividades o aluno já fez sem ler os documentos das atividades
         const fetchSubmissions = async () => {
             try {
-                // Query em todas as coleções chamadas 'submissions' onde studentId é o usuário atual
+                // Query em todas as coleções chamadas 'submissions' onde studentId é o usuário atual.
+                // Isso exige que o documento de submissão tenha o campo 'studentId'.
                 const q = query(collectionGroup(db, 'submissions'), where('studentId', '==', user.id));
                 const snap = await getDocs(q);
                 
@@ -149,9 +150,14 @@ export function useStudentContent(user: User | null) {
                     }
                 });
                 setUserSubmissions(subsMap);
-            } catch (error) {
-                console.warn("Falha ao carregar submissões:", error);
-                // Não falha o load total, mas o aluno pode não ver status atualizado
+            } catch (error: any) {
+                // Tratamento silencioso para permissões ou falta de índice
+                if (error.code === 'permission-denied' || error.code === 'failed-precondition') {
+                    // console.debug("Fetch submissions collectionGroup skipped:", error.message);
+                    // Não limpamos userSubmissions aqui para manter estado otimista se houver
+                } else {
+                    console.warn("Falha ao carregar submissões:", error);
+                }
             }
         };
 

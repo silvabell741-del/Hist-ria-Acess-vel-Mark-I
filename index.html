@@ -1058,7 +1058,13 @@
 
     /* Sidebar Enhancement */
     .akebono-dawn aside, .akebono-dawn .bg-blue-950 {
-        background: linear-gradient(180deg, #FCE4EC 0%, #FFF0F5 50%, #F3E5F5 100%) !important; /* Gradient: Pink -> White -> Lavender */
+        background: linear-gradient(180deg, 
+            #E0F7FA 0%,   /* Céu */
+            #FCE4EC 30%,  /* Flor */
+            #F8BBD0 55%,  /* Pétala */
+            #D7CCC8 80%,  /* Árvore */
+            #DCEDC8 100%  /* Grama */
+        ) !important;
         border-right: 1px solid rgba(244, 143, 177, 0.3) !important;
         box-shadow: 4px 0 20px rgba(244, 143, 177, 0.1) !important;
     }
@@ -1078,22 +1084,23 @@
         padding-left: 1rem !important; /* Subtle slide effect */
     }
 
-    /* Active Item in Sidebar - Floating Card Style */
+    /* Active Item in Sidebar - Natureza Nascendo (Neon Green) */
     .akebono-dawn .bg-blue-800 {
-        background-color: #FFFFFF !important;
-        color: #D81B60 !important; /* Vivid Pink */
-        border: 1px solid #F8BBD0 !important;
-        border-left: 4px solid #D81B60 !important;
-        box-shadow: 0 4px 15px rgba(216, 27, 96, 0.15) !important;
+        background-color: rgba(255, 255, 255, 0.8) !important;
+        color: #00E676 !important; /* Neon Green #00E676 */
+        border: 1px solid #00E676 !important;
+        border-left: 4px solid #00E676 !important;
+        box-shadow: 0 4px 15px rgba(0, 230, 118, 0.25) !important; /* Green Glow */
         border-radius: 12px !important;
         margin: 0 8px !important; 
         font-weight: 700 !important;
     }
 
     .akebono-dawn header {
-        background-color: rgba(255, 255, 255, 0.8) !important;
+        background-color: rgba(255, 255, 255, 0.65) !important;
         backdrop-filter: blur(12px);
-        border-bottom: 1px solid #FCE4EC !important;
+        -webkit-backdrop-filter: blur(12px);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.6) !important;
     }
     .akebono-dawn header h1 {
         color: #880E4F !important; 
@@ -1101,13 +1108,33 @@
         letter-spacing: 0.05em;
     }
 
-    /* Cards */
+    /* Cards - Washi/Glass Style */
     .akebono-dawn .bg-white, .akebono-dawn .dark\:bg-slate-800 {
-        background-color: #FFFFFF !important;
-        border: 1px solid #FCE4EC !important; 
-        box-shadow: 0 4px 20px rgba(244, 143, 177, 0.1) !important; /* Softer Pink shadow */
+        background-color: rgba(255, 253, 250, 0.65) !important; /* Creamy Translucent */
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.6) !important; 
+        box-shadow: 0 8px 32px 0 rgba(244, 143, 177, 0.15) !important;
         color: #5D4037 !important;
         border-radius: 16px !important;
+    }
+
+    /* Inputs - Lavender Blush */
+    .akebono-dawn input, 
+    .akebono-dawn select, 
+    .akebono-dawn textarea {
+        background-color: #FFF0F5 !important; /* Lavender Blush */
+        border: 1px solid rgba(216, 27, 96, 0.2) !important;
+        color: #5D4037 !important;
+        border-radius: 8px !important;
+    }
+    .akebono-dawn input:focus, 
+    .akebono-dawn select:focus, 
+    .akebono-dawn textarea:focus {
+        background-color: #FFFFFF !important;
+        border-color: #00E676 !important; /* Green focus */
+        outline: none !important;
+        box-shadow: 0 0 0 2px rgba(0, 230, 118, 0.2) !important;
     }
 
     /* Primary Buttons: Sky Blue Gradient */
@@ -1133,10 +1160,26 @@
 
     /* Akebono Hamburger */
     .akebono-dawn button[aria-label="Abrir menu"] {
-        background-color: #FFFFFF !important;
-        color: #D81B60 !important;
+        background-color: rgba(255, 255, 255, 0.8) !important;
+        backdrop-filter: blur(4px);
         border: 1px solid #F8BBD0 !important;
         box-shadow: 0 2px 10px rgba(216, 27, 96, 0.1) !important;
+        /* Reset content for Emoji */
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 0 !important;
+        width: 48px !important; /* Ensure generic size matches others */
+        height: 48px !important;
+    }
+
+    .akebono-dawn button[aria-label="Abrir menu"] svg {
+        display: none !important;
+    }
+
+    .akebono-dawn button[aria-label="Abrir menu"]::after {
+        content: '🌸';
+        font-size: 1.5rem;
     }
 
     /* --- Itoshi Sae Theme (Genius) --- */

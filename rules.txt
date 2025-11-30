@@ -177,7 +177,9 @@ service cloud.firestore {
     match /notifications/{id} {
       allow read: if isUser(resource.data.userId);
       allow create: if isAuthenticated();
-      allow update: if isUser(resource.data.userId) || isUser(resource.data.actorId);
+      // Permitir atualização se for o dono (usuário), o criador (ator) OU um professor (garante que professores possam agrupar/atualizar notificações)
+      allow update: if isUser(resource.data.userId) || isUser(resource.data.actorId) || isTeacher();
+      allow delete: if isUser(resource.data.userId) || isTeacher();
     }
 
     match /broadcasts/{id} {

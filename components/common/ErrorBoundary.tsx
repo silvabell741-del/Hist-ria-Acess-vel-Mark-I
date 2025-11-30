@@ -11,13 +11,10 @@ interface State {
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
-    constructor(props: Props) {
-        super(props);
-        this.state = {
-            hasError: false,
-            error: null
-        };
-    }
+    public state: State = {
+        hasError: false,
+        error: null
+    };
 
     public static getDerivedStateFromError(error: Error): State {
         // Update state so the next render will show the fallback UI.
@@ -47,7 +44,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
                         </p>
                         <button
                             onClick={() => window.location.reload()}
-                            className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                            className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus:ring-offset-2"
                         >
                             Recarregar Página
                         </button>

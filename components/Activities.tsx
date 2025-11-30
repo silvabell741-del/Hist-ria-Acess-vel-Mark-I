@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Activity, ActivitySubmission } from '../types';
 import { SpinnerIcon } from '../constants/index';
 import { cleanActivity } from '../utils/cleanActivity';
-import { QueryDocumentSnapshot, query, collection, where, orderBy, limit, startAfter, getDocs, doc, getDoc } from 'firebase/firestore';
+import { QueryDocumentSnapshot, query, collection, where, orderBy, limit, startAfter, getDocs, doc, getDoc, documentId } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import { useSettings } from '../contexts/SettingsContext';
 import { useInfiniteQuery } from '@tanstack/react-query';
@@ -39,7 +39,7 @@ const ActivityCard: React.FC<{ activity: Activity; submission?: ActivitySubmissi
     let statusText: string | null = null;
     let statusColor: string = '';
 
-    // Prioridade Visual: Se tem submissão, mostra o status real. Se não, mostra "A Fazer".
+    // Prioridade Visual: Se tem submissão, mostra o status real. Se não, não mostra badge "A Fazer".
     if (studentSubmission) {
         statusText = studentSubmission.status;
         if (statusText === 'Corrigido') {
@@ -126,17 +126,13 @@ const ActivityCard: React.FC<{ activity: Activity; submission?: ActivitySubmissi
                         <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors hc-text-primary pr-8 line-clamp-2" aria-hidden="true">{activity.title}</h3>
                     </div>
                     
-                    <div className="mb-3" aria-hidden="true">
-                         {statusText ? (
+                    {statusText && (
+                        <div className="mb-3" aria-hidden="true">
                             <span className={`text-xs font-bold px-2 py-1 rounded-full uppercase tracking-wide ${statusColor}`}>
                                 {statusText}
                             </span>
-                        ) : (
-                            <span className="text-xs font-bold px-2 py-1 rounded-full uppercase tracking-wide bg-slate-100 text-slate-500 border border-slate-200 dark:bg-slate-700 dark:text-slate-400 dark:border-slate-600">
-                                A Fazer
-                            </span>
-                        )}
-                    </div>
+                        </div>
+                    )}
 
                      <div className="flex items-center flex-wrap gap-2 mt-3 text-xs font-medium" aria-hidden="true">
                         {activity.unidade && <span className={`px-2 py-1 rounded ${unidadeColor}`}>{activity.unidade}</span>}
@@ -176,13 +172,82 @@ const Activities: React.FC = () => {
     const unidadeOptions = ['1ª Unidade', '2ª Unidade', '3ª Unidade', '4ª Unidade'];
     const materiaOptions = ['História', 'Geografia', 'Filosofia', 'Sociologia', 'História Sergipana'];
 
-    // --- Infinite Query Logic (Pure Fetching) ---
-    // O fetch não filtra mais por status (que depende do userSubmissions local). 
-    // Ele traz tudo do backend, e o filtro de status é feito no cliente (useMemo).
-    // Isso garante que o cache funcione corretamente e a atualização visual seja instantânea.
+    // Helper: Fetch by ID batch (Firestore 'in' limit is 10)
+    const fetchActivitiesByIds = async (ids: string[]) => {
+        if (ids.length === 0) return [];
+        
+        // Chunk ids into groups of 10
+        const chunks = [];
+        for (let i = 0; i < ids.length; i += 10) {
+            chunks.push(ids.slice(i, i + 10));
+        }
+        
+        const promises = chunks.map(chunk => {
+            const q = query(collection(db, "activities"), where(documentId(), "in", chunk));
+            return getDocs(q);
+        });
+        
+        const snapshots = await Promise.all(promises);
+        const allDocs = snapshots.flatMap(snap => snap.docs);
+        return allDocs;
+    };
+
+    // Gera uma assinatura das submissões para invalidar a query quando carregarem
+    const submissionsSignature = useMemo(() => {
+        if (!userSubmissions) return '';
+        // Cria uma string que muda se o número de submissões ou o status de alguma mudar
+        return Object.keys(userSubmissions).sort().map(key => `${key}:${userSubmissions[key].status}`).join('|');
+    }, [userSubmissions]);
+
+    // --- Infinite Query Logic ---
     const fetchActivitiesPage = async ({ pageParam }: { pageParam: string | null }) => {
         if (!user) return { activities: [], lastId: null };
 
+        // 1. STRATEGY: ID-Based Fetching for specific status (Pendente/Corrigida)
+        // This ensures we find them regardless of pagination depth
+        if (selectedStatus === 'pendente' || selectedStatus === 'corrigida') {
+            // Se estamos na pagina 2 ou mais de um filtro especifico, e a lógica de pageParam
+            // não foi feita para isso, paramos. Aqui assumimos carregamento único para essas listas filtradas
+            // para simplificar e corrigir o bug.
+            if (pageParam) return { activities: [], lastId: null };
+
+            const targetStatus = selectedStatus === 'pendente' ? 'Aguardando correção' : 'Corrigido';
+            
+            // Get relevant activity IDs from submissions map
+            const relevantIds = Object.keys(userSubmissions).filter(id => {
+                const sub = userSubmissions[id];
+                return sub && sub.status === targetStatus;
+            });
+
+            if (relevantIds.length === 0) {
+                return { activities: [], lastId: null };
+            }
+
+            const docs = await fetchActivitiesByIds(relevantIds);
+            
+            const results = docs.map(d => {
+                const data = d.data();
+                let className = data.className;
+                if (!className || className === 'Turma desconhecida') {
+                    const cls = safeStudentClasses.find(c => c.id === data.classId);
+                    if (cls) className = cls.name;
+                }
+                return {
+                    id: d.id,
+                    ...data,
+                    createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : data.createdAt,
+                    dueDate: data.dueDate,
+                    className: className || 'Turma'
+                } as Activity;
+            });
+
+            // Client-side Sort
+            results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+            return { activities: results, lastId: null };
+        }
+
+        // 2. STRATEGY: Standard Pagination for "All" or "To Do"
         let q = query(
             collection(db, "activities"),
             where("isVisible", "==", true),
@@ -230,7 +295,6 @@ const Activities: React.FC = () => {
                 const cls = safeStudentClasses.find(c => c.id === data.classId);
                 if (cls) className = cls.name;
             }
-            // Sanitize timestamps
             return {
                 id: d.id,
                 ...data,
@@ -255,47 +319,48 @@ const Activities: React.FC = () => {
         status,
         refetch
     } = useInfiniteQuery({
-        // Removemos 'selectedStatus' e 'userSubmissions' da chave para usar o cache de forma eficiente.
-        // O filtro de status agora é visual (no useMemo abaixo).
-        queryKey: ['activities', user?.id, selectedClassId, selectedMateria, selectedUnidade],
+        // Adicionamos 'submissionsSignature' à chave para forçar refetch quando as submissões forem carregadas ou atualizadas
+        queryKey: ['activities', user?.id, selectedClassId, selectedMateria, selectedUnidade, selectedStatus, submissionsSignature],
         queryFn: fetchActivitiesPage,
         getNextPageParam: (lastPage) => lastPage.lastId || undefined,
         initialPageParam: null,
         enabled: !!user && safeStudentClasses.length > 0
     });
 
-    // --- Client-Side Filtering (Reactive to userSubmissions) ---
+    // --- Client-Side Filtering (Refined) ---
     const displayedActivities = useMemo(() => {
         const allActivities = data?.pages.flatMap(page => page.activities) || [];
         
-        return allActivities.filter(activity => {
-            const studentSubmission = userSubmissions[activity.id];
-            
-            if (selectedStatus === 'all') return true;
-            
-            if (selectedStatus === 'a_fazer') {
-                // A Fazer = Sem submissão OU pendente de envio offline
+        // If we are in specific modes, the query already filtered IDs, but we might need extra safety
+        if (selectedStatus === 'pendente' || selectedStatus === 'corrigida') {
+            // Apply secondary filters (class/materia) client-side for these specific lists since we fetched by ID
+            return allActivities.filter(activity => {
+                if (selectedClassId !== 'all' && activity.classId !== selectedClassId) return false;
+                if (selectedMateria !== 'all' && activity.materia !== selectedMateria) return false;
+                if (selectedUnidade !== 'all' && activity.unidade !== selectedUnidade) return false;
+                return true;
+            });
+        }
+
+        // For 'a_fazer', we perform client-side exclusion of submitted items
+        if (selectedStatus === 'a_fazer') {
+            return allActivities.filter(activity => {
+                const studentSubmission = userSubmissions[activity.id];
+                // Show if no submission OR if submission is pending offline sync (not yet real submission)
                 return !studentSubmission || studentSubmission.status === 'Pendente Envio';
-            }
-            
-            if (selectedStatus === 'pendente') {
-                return studentSubmission && studentSubmission.status === 'Aguardando correção';
-            }
-            
-            if (selectedStatus === 'corrigida') {
-                return studentSubmission && studentSubmission.status === 'Corrigido';
-            }
-            
-            return true;
-        });
-    }, [data, userSubmissions, selectedStatus]);
+            });
+        }
+
+        // For 'all', show everything
+        return allActivities;
+
+    }, [data, userSubmissions, selectedStatus, selectedClassId, selectedMateria, selectedUnidade]);
 
     const handleSearch = () => {
         refetch();
     };
 
     const handleActivityClick = (activity: Activity) => {
-        // Pass submissions if we have them in the map, so the view knows the status
         const activityWithSub = { 
             ...cleanActivity(activity), 
             submissions: userSubmissions[activity.id] ? [userSubmissions[activity.id]] : [] 
@@ -320,10 +385,10 @@ const Activities: React.FC = () => {
                     <div className="flex flex-col">
                         <label htmlFor="status-filter" className="sr-only">Status</label>
                         <select id="status-filter" value={selectedStatus} onChange={e => setSelectedStatus(e.target.value)} className={filterSelectClasses}>
-                            <option value="all">Todos os Status</option>
-                            <option value="a_fazer">A Fazer (Pendente Envio)</option>
+                            <option value="a_fazer">A Fazer</option>
                             <option value="pendente">Aguardando Correção</option>
                             <option value="corrigida">Corrigidas</option>
+                            <option value="all">Todas</option>
                         </select>
                     </div>
 
@@ -384,7 +449,7 @@ const Activities: React.FC = () => {
                             </li>
                         ))}
                     </ul>
-                    {hasNextPage && (
+                    {hasNextPage && selectedStatus === 'all' && (
                         <div className="flex justify-center pt-6">
                             <button
                                 onClick={() => fetchNextPage()}

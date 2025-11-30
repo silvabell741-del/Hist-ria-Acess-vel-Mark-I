@@ -175,7 +175,8 @@ service cloud.firestore {
     // =================================================================================
 
     match /notifications/{id} {
-      allow read: if isUser(resource.data.userId);
+      // Permitir leitura se for o destinatário (userId) OU o remetente (actorId) para permitir agrupamento
+      allow read: if isUser(resource.data.userId) || isUser(resource.data.actorId);
       allow create: if isAuthenticated();
       // Permitir atualização se for o dono (usuário), o criador (ator) OU um professor (garante que professores possam agrupar/atualizar notificações)
       allow update: if isUser(resource.data.userId) || isUser(resource.data.actorId) || isTeacher();

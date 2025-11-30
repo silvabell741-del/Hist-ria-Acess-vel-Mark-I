@@ -31,6 +31,7 @@ export async function createNotification(params: CreateNotificationParams) {
         const q = query(
             collection(db, "notifications"),
             where("userId", "==", params.userId),
+            where("actorId", "==", params.actorId), // Garante que só agrupa correções do mesmo professor
             where("type", "==", "activity_correction"),
             where("read", "==", false), // Apenas agrupa se o aluno ainda não leu
             orderBy("timestamp", "desc"),

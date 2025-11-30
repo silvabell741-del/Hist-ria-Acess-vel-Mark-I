@@ -56,7 +56,7 @@ export function useStudentContent(user: User | null) {
                 .filter((c): c is TeacherClass => c !== null);
         },
         enabled: isStudent && !!user,
-        staleTime: 1000 * 60 * 30, // 30 minutes stale
+        // Removed staleTime override to use global 0 setting
     });
 
     // --- 2. QUERY: Module Progress ---
@@ -124,7 +124,7 @@ export function useStudentContent(user: User | null) {
             }
         },
         enabled: isStudent && !!user,
-        staleTime: 1000 * 60 * 5 // 5 minutes
+        // Removed staleTime override to use global 0 setting
     });
 
     // --- MUTATIONS ---
@@ -289,8 +289,10 @@ export function useStudentContent(user: User | null) {
         },
         onSuccess: () => {
             addToast("Atividade enviada com sucesso!", "success");
+            // Robust invalidation to force UI update immediately
             queryClient.invalidateQueries({ queryKey: ['studentSubmissions'] });
             queryClient.invalidateQueries({ queryKey: ['activities'] });
+            queryClient.invalidateQueries({ queryKey: ['studentModulesProgress'] });
         },
         onError: (error: any) => {
             console.error("Submission error:", error);

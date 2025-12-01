@@ -56,7 +56,6 @@ export function useStudentContent(user: User | null) {
                 .filter((c): c is TeacherClass => c !== null);
         },
         enabled: isStudent && !!user,
-        // Removed staleTime override to use global 0 setting
     });
 
     // --- 2. QUERY: Module Progress ---
@@ -108,8 +107,7 @@ export function useStudentContent(user: User | null) {
         queryFn: async () => {
             if (!user) return {};
             try {
-                // IMPORTANT: This 'collectionGroup' query usually requires a Firestore Index.
-                // Check your browser console if this returns empty unexpectedly.
+                // IMPORTANT: This 'collectionGroup' query requires a Firestore Index (submissions + studentId).
                 const q = query(collectionGroup(db, 'submissions'), where('studentId', '==', user.id));
                 const snap = await getDocs(q);
                 
@@ -123,15 +121,18 @@ export function useStudentContent(user: User | null) {
                 });
                 return subsMap;
             } catch (error: any) {
-                console.error("ERRO CRÍTICO AO BUSCAR SUBMISSÕES:", error);
+                // Return empty object on error to prevent crash, logs specific error for debugging
                 if (error.code === 'failed-precondition') {
-                    console.error("🔥 FALTA ÍNDICE NO FIRESTORE 🔥: O erro acima contém um link. Clique nele para criar o índice 'submissions' + 'studentId'.");
+                    console.error("🔥 FALTA ÍNDICE NO FIRESTORE 🔥: Clique no link no console para criar o índice 'submissions' + 'studentId'.");
+                } else if (error.code === 'permission-denied') {
+                    console.error("🔒 ERRO DE PERMISSÃO: Verifique se rules.txt permite leitura de submissões onde studentId == auth.uid.");
+                } else {
+                    console.error("Erro ao buscar submissões:", error);
                 }
                 return {};
             }
         },
         enabled: isStudent && !!user,
-        // Removed staleTime override to use global 0 setting
     });
 
     // --- MUTATIONS ---
@@ -321,13 +322,10 @@ export function useStudentContent(user: User | null) {
     };
 
     const handleActivitySubmit = async (activityId: string, content: string) => {
-        // Direct mutation call. Firebase SDK handles offline queuing natively now.
-        // We catch errors to inform the user if something critical fails immediately (e.g. auth issues).
-        // Network errors are retried by Firebase internally when connection restores.
         try {
             await submitActivityMutation.mutateAsync({ activityId, content });
         } catch (e) {
-            // Error is handled in onError of mutation
+            // Error handled in onError
         }
     };
 

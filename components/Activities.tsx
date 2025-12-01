@@ -157,7 +157,8 @@ const ActivityCard: React.FC<{ activity: Activity; submission?: ActivitySubmissi
 
 
 const Activities: React.FC = () => {
-    const { studentClasses, userSubmissions } = useStudentAcademic();
+    // Destructure isLoading from context. This loading state aggregates (classes + submissions + progress)
+    const { studentClasses, userSubmissions, isLoading: isContextLoading } = useStudentAcademic();
     const { openActivity } = useNavigation(); 
     const { user } = useAuth();
     const { theme } = useSettings();
@@ -168,7 +169,11 @@ const Activities: React.FC = () => {
     const [selectedMateria, setSelectedMateria] = useState('all');
     const [selectedStatus, setSelectedStatus] = useState('a_fazer'); 
 
+    // CRITICAL: Safe fallback to empty object to prevent "Cannot read properties of undefined" crash
+    // if context updates partially during mount.
+    const safeSubmissions = userSubmissions || {};
     const safeStudentClasses = studentClasses || [];
+    
     const unidadeOptions = ['1ª Unidade', '2ª Unidade', '3ª Unidade', '4ª Unidade'];
     const materiaOptions = ['História', 'Geografia', 'Filosofia', 'Sociologia', 'História Sergipana'];
 
@@ -194,10 +199,8 @@ const Activities: React.FC = () => {
 
     // Gera uma assinatura das submissões para invalidar a query quando carregarem
     const submissionsSignature = useMemo(() => {
-        if (!userSubmissions) return '';
-        // Cria uma string que muda se o número de submissões ou o status de alguma mudar
-        return Object.keys(userSubmissions).sort().map(key => `${key}:${userSubmissions[key].status}`).join('|');
-    }, [userSubmissions]);
+        return Object.keys(safeSubmissions).sort().map(key => `${key}:${safeSubmissions[key].status}`).join('|');
+    }, [safeSubmissions]);
 
     // --- Infinite Query Logic ---
     const fetchActivitiesPage = async ({ pageParam }: { pageParam: string | null }) => {
@@ -207,15 +210,14 @@ const Activities: React.FC = () => {
         // This ensures we find them regardless of pagination depth
         if (selectedStatus === 'pendente' || selectedStatus === 'corrigida') {
             // Se estamos na pagina 2 ou mais de um filtro especifico, e a lógica de pageParam
-            // não foi feita para isso, paramos. Aqui assumimos carregamento único para essas listas filtradas
-            // para simplificar e corrigir o bug.
+            // não foi feita para isso, paramos. Aqui assumimos carregamento único para essas listas filtradas.
             if (pageParam) return { activities: [], lastId: null };
 
             const targetStatus = selectedStatus === 'pendente' ? 'Aguardando correção' : 'Corrigido';
             
             // Get relevant activity IDs from submissions map
-            const relevantIds = Object.keys(userSubmissions).filter(id => {
-                const sub = userSubmissions[id];
+            const relevantIds = Object.keys(safeSubmissions).filter(id => {
+                const sub = safeSubmissions[id];
                 return sub && sub.status === targetStatus;
             });
 
@@ -331,9 +333,8 @@ const Activities: React.FC = () => {
     const displayedActivities = useMemo(() => {
         const allActivities = data?.pages.flatMap(page => page.activities) || [];
         
-        // If we are in specific modes, the query already filtered IDs, but we might need extra safety
+        // If we are in specific modes, the query already filtered IDs
         if (selectedStatus === 'pendente' || selectedStatus === 'corrigida') {
-            // Apply secondary filters (class/materia) client-side for these specific lists since we fetched by ID
             return allActivities.filter(activity => {
                 if (selectedClassId !== 'all' && activity.classId !== selectedClassId) return false;
                 if (selectedMateria !== 'all' && activity.materia !== selectedMateria) return false;
@@ -345,7 +346,8 @@ const Activities: React.FC = () => {
         // For 'a_fazer', we perform client-side exclusion of submitted items
         if (selectedStatus === 'a_fazer') {
             return allActivities.filter(activity => {
-                const studentSubmission = userSubmissions[activity.id];
+                // SAFETY: Use safeSubmissions here to prevent crash
+                const studentSubmission = safeSubmissions[activity.id];
                 // Show if no submission OR if submission is pending offline sync (not yet real submission)
                 return !studentSubmission || studentSubmission.status === 'Pendente Envio';
             });
@@ -354,16 +356,17 @@ const Activities: React.FC = () => {
         // For 'all', show everything
         return allActivities;
 
-    }, [data, userSubmissions, selectedStatus, selectedClassId, selectedMateria, selectedUnidade]);
+    }, [data, safeSubmissions, selectedStatus, selectedClassId, selectedMateria, selectedUnidade]);
 
     const handleSearch = () => {
         refetch();
     };
 
     const handleActivityClick = (activity: Activity) => {
+        // SAFETY: Use safeSubmissions
         const activityWithSub = { 
             ...cleanActivity(activity), 
-            submissions: userSubmissions[activity.id] ? [userSubmissions[activity.id]] : [] 
+            submissions: safeSubmissions[activity.id] ? [safeSubmissions[activity.id]] : [] 
         };
         openActivity(activityWithSub);
     };
@@ -374,6 +377,10 @@ const Activities: React.FC = () => {
     if (isAurora) {
         searchButtonClass = "w-full md:w-auto px-6 py-2.5 bg-[#00B7FF] text-white font-semibold rounded-lg hover:bg-[#0099CC] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00B7FF] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center transition-colors shadow-[0_0_15px_rgba(0,183,255,0.6)] border border-[#00B7FF] hc-button-primary-override";
     }
+
+    // --- CRITICAL LOADING CHECK ---
+    // If context is loading (submissions not ready), don't render list to avoid flicker/race/crash
+    const isLoadingCombined = isContextLoading || status === 'pending';
 
     return (
         <div className="space-y-6">
@@ -422,7 +429,7 @@ const Activities: React.FC = () => {
                     disabled={isFetching}
                     className={searchButtonClass}
                 >
-                    {isFetching && status !== 'pending' ? <SpinnerIcon className="h-5 w-5 text-white" /> : (
+                    {isFetching && !isLoadingCombined ? <SpinnerIcon className="h-5 w-5 text-white" /> : (
                         <>
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                             Buscar
@@ -431,10 +438,12 @@ const Activities: React.FC = () => {
                 </button>
             </div>
 
-            {status === 'pending' ? (
+            {isLoadingCombined ? (
                  <div className="text-center py-20">
                     <SpinnerIcon className="h-10 w-10 text-indigo-500 mx-auto mb-4" />
-                    <p className="text-slate-500 dark:text-slate-400">Buscando atividades...</p>
+                    <p className="text-slate-500 dark:text-slate-400">
+                        {isContextLoading ? 'Sincronizando histórico...' : 'Buscando atividades...'}
+                    </p>
                 </div>
             ) : displayedActivities.length > 0 ? (
                 <>
@@ -443,7 +452,7 @@ const Activities: React.FC = () => {
                             <li key={activity.id}>
                                 <ActivityCard 
                                     activity={activity} 
-                                    submission={userSubmissions[activity.id]}
+                                    submission={safeSubmissions[activity.id]}
                                     onClick={() => handleActivityClick(activity)} 
                                 />
                             </li>

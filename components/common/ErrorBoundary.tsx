@@ -1,22 +1,30 @@
-import React, { ErrorInfo, ReactNode } from 'react';
+import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { Card } from './Card';
 
-interface Props {
+interface ErrorBoundaryProps {
     children?: ReactNode;
 }
 
-interface State {
+interface ErrorBoundaryState {
     hasError: boolean;
     error: Error | null;
 }
 
-export class ErrorBoundary extends React.Component<Props, State> {
-    public state: State = {
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+    public state: ErrorBoundaryState = {
         hasError: false,
         error: null
     };
 
-    public static getDerivedStateFromError(error: Error): State {
+    // Explicitly declaring props to avoid TypeScript error in some configurations
+    public readonly props: Readonly<ErrorBoundaryProps>;
+
+    constructor(props: ErrorBoundaryProps) {
+        super(props);
+        this.props = props;
+    }
+
+    public static getDerivedStateFromError(error: Error): ErrorBoundaryState {
         // Update state so the next render will show the fallback UI.
         return { hasError: true, error };
     }

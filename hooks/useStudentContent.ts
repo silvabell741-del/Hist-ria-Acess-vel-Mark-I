@@ -108,11 +108,14 @@ export function useStudentContent(user: User | null) {
         queryFn: async () => {
             if (!user) return {};
             try {
+                // IMPORTANT: This 'collectionGroup' query usually requires a Firestore Index.
+                // Check your browser console if this returns empty unexpectedly.
                 const q = query(collectionGroup(db, 'submissions'), where('studentId', '==', user.id));
                 const snap = await getDocs(q);
                 
                 const subsMap: Record<string, ActivitySubmission> = {};
                 snap.forEach(d => {
+                    // Navigate up: submission -> submissions_collection -> activity_doc
                     const activityId = d.ref.parent.parent?.id; 
                     if (activityId) {
                         subsMap[activityId] = d.data() as ActivitySubmission;
@@ -120,6 +123,10 @@ export function useStudentContent(user: User | null) {
                 });
                 return subsMap;
             } catch (error: any) {
+                console.error("ERRO CRÍTICO AO BUSCAR SUBMISSÕES:", error);
+                if (error.code === 'failed-precondition') {
+                    console.error("🔥 FALTA ÍNDICE NO FIRESTORE 🔥: O erro acima contém um link. Clique nele para criar o índice 'submissions' + 'studentId'.");
+                }
                 return {};
             }
         },

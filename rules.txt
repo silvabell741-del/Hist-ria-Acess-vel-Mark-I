@@ -17,16 +17,17 @@ service cloud.firestore {
     }
 
     // --- Role-Based Access Control (RBAC) ---
-    function getUserRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    // Recupera dados do usuário de forma segura
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
     function isTeacher() {
-      return isAuthenticated() && getUserRole() == 'professor';
+      return isAuthenticated() && getUserData().role == 'professor';
     }
 
     function isAdmin() {
-      return isAuthenticated() && getUserRole() == 'admin';
+      return isAuthenticated() && getUserData().role == 'admin';
     }
 
     // --- Validação de Dados (Schema Validation) ---
@@ -79,8 +80,6 @@ service cloud.firestore {
         && request.resource.data.teacherId == request.auth.uid
         && isValidString(request.resource.data.name, 3, 100);
 
-      // Professor: Total control over their class
-      // Student/Others: Can only update if they are just joining/leaving (studentIds array changes)
       allow update: if (isTeacher() && resource.data.teacherId == request.auth.uid) ||
                     (isAuthenticated() 
                      && request.resource.data.name == resource.data.name 
@@ -123,7 +122,6 @@ service cloud.firestore {
         && request.resource.data.creatorId == request.auth.uid
         && isValidString(request.resource.data.title, 1, 200);
 
-      // Update: Teachers (owners) OR authenticated users updating ONLY submission counters
       allow update: if (isTeacher() && resource.data.creatorId == request.auth.uid) ||
                     (isAuthenticated() 
                      && request.resource.data.title == resource.data.title
@@ -136,15 +134,17 @@ service cloud.firestore {
 
       // --- SUBMISSÕES (SUBCOLEÇÃO) ---
       match /submissions/{submissionId} {
-        // LEITURA OTIMIZADA
-        allow read: if submissionId == request.auth.uid || resource.data.studentId == request.auth.uid;
+        // LEITURA:
+        // 1. O próprio aluno dono da submissão (garante collectionGroup query where studentId == auth.uid)
+        // 2. Professores (acesso geral para correção)
+        allow read: if resource.data.studentId == request.auth.uid;
         allow read: if isTeacher();
 
-        // CRIAR
+        // CRIAR:
         allow create: if (isUser(request.resource.data.studentId) || isTeacher())
                       && isValidString(request.resource.data.content, 1, 100000); // 100KB limit
 
-        // ATUALIZAR
+        // ATUALIZAR:
         allow update: if (isUser(resource.data.studentId) && notUpdating('grade') && notUpdating('feedback')) || isTeacher();
       }
     }
@@ -164,9 +164,7 @@ service cloud.firestore {
     }
 
     match /student_grades/{id} {
-      // Leitura: Aluno vê suas próprias notas, Professor vê todas (para histórico escolar)
       allow read: if isAuthenticated() && (resource.data.studentId == request.auth.uid || isTeacher());
-      // Escrita: Apenas professor pode lançar notas
       allow write: if isTeacher();
     }
 
@@ -175,10 +173,8 @@ service cloud.firestore {
     // =================================================================================
 
     match /notifications/{id} {
-      // Permitir leitura se for o destinatário (userId) OU o remetente (actorId) para permitir agrupamento
       allow read: if isUser(resource.data.userId) || isUser(resource.data.actorId);
       allow create: if isAuthenticated();
-      // Permitir atualização se for o dono (usuário), o criador (ator) OU um professor (garante que professores possam agrupar/atualizar notificações)
       allow update: if isUser(resource.data.userId) || isUser(resource.data.actorId) || isTeacher();
       allow delete: if isUser(resource.data.userId) || isTeacher();
     }
